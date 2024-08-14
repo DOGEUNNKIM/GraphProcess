@@ -1,13 +1,10 @@
 #include <iostream>
 
 #define VDATA_SIZE 16
-#define ALPHA 0.85f
 #define MAX_ITER 1000
-#define EPSILON 1e-6f
-#define NUM_NODES 100
-#define NUM_EDGES 1000
+#define NUM_NODES 2048
+#define TILE_SIZE 512
 #define BUFFER_SIZE 16
-#define TILE_SIZE 16
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
 
 typedef struct v_datatype { int data[VDATA_SIZE]; } v_dt;
@@ -29,24 +26,26 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
 #pragma HLS INTERFACE m_axi port = out1 offset = slave bundle = gmem3 
 #pragma HLS INTERFACE m_axi port = out2 offset = slave bundle = gmem4 
 
+float ALPHA = 0.85f;
+float EPSILON = 1e-6f;
+
 // set constant
 float base_score;
-#pragma HLS bind_op variable=base_score op=fsub impl=fabric
-#pragma HLS bind_op variable=base_score op=fdiv impl=fabric
-base_score = (1.0f - ALPHA) / NUM_NODES;
+float a = 1;
+base_score = (a - ALPHA) / NUM_NODES;
 
 int row_ptr_buffer[2];
 #pragma HLS array_partition variable=row_ptr_buffer complete
 float out_degree_buffer[2];
 #pragma HLS array_partition variable=out_degree_buffer complete
 float score_buffer[TILE_SIZE];
-#pragma HLS array_partition variable=score_buffer complete
+#pragma HLS array_partition variable=score_buffer factor=16 cyclic
 
 int col_idx_buffer[BUFFER_SIZE];
 #pragma HLS array_partition variable=col_idx_buffer factor=16 cyclic
 
-
-for (int iter = 0; iter < MAX_ITER; iter++) {
+int iter;
+for (iter = 0; iter < MAX_ITER; iter++) {
   for (int i = 0; i < NUM_NODES; i ++) {
 #pragma HLS pipeline II=1
     out2[i] = base_score;
@@ -71,16 +70,16 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
       row_ptr_buffer[1]= in2[(u+tile*NUM_NODES+1)/16].data[(u+tile*NUM_NODES+1)%16];
       int size_ = row_ptr_buffer[1] - row_ptr_buffer[0];
       
+	  float src_pagerank =  out1[u] ;
       out_degree_buffer[0]= in3[u/16].data[u%16];
       out_degree_buffer[1]= in3[(u+1)/16].data[(u+1)%16]; 
-      float out_degree_u;  
-#pragma HLS bind_op variable=out_degree_u op=fsub impl=fabric
+      float out_degree_u; 
       out_degree_u = out_degree_buffer[1] - out_degree_buffer[0];
       int buffer_start = row_ptr_buffer[0];
       //push
-      for (int b = 0; b < NUM_NODES; b += BUFFER_SIZE) {
-        if(b < size_){
-#pragma HLS pipeline //rewind
+      for (int b = 0; b < size_; b += BUFFER_SIZE) {
+
+#pragma HLS pipeline
           //prefatch col_idx_buffer
           int chunk_size = (b + BUFFER_SIZE > size_) ? size_ - b : BUFFER_SIZE;
   
@@ -88,29 +87,15 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
 #pragma HLS unroll
             col_idx_buffer[k] = in1[(b + buffer_start + k)/16].data[(b + buffer_start + k)%16];
           }
-          
           //SIMD parallel compute
-          for (int l = 0; l < BUFFER_SIZE; l++) {
+          for (int l = 0; l < chunk_size; l++) {
 #pragma HLS unroll 
             if( l < chunk_size) {
-            float out1_reg = (l < BUFFER_SIZE) ? out1[u] : 0.0f;
-            float score_buffer_reg_prev = (l < BUFFER_SIZE) ? score_buffer[col_idx_buffer[l] - TILE_SIZE*tile] : 0.0f;
-            float score_buffer_reg;
-            //
-            // 여기서 dsp 계속 씀
-            
-            score_buffer_reg = score_buffer_reg_prev + (ALPHA *  out1_reg / out_degree_u );
-  
-  
-  
-  
-            //
             int idx = col_idx_buffer[l] - TILE_SIZE*tile;
-  
-            score_buffer[idx] = score_buffer_reg;
+            score_buffer[idx] = score_buffer[idx] + (ALPHA * src_pagerank / out_degree_u );
             }
           }
-        }
+        
       }
     }
     
@@ -125,20 +110,18 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
   
   //check converge & update score
   
-  int diff = 0;
+  float diff = 0;
   for (int i = 0; i < NUM_NODES; i += 1) {
 #pragma HLS pipeline II=1
-    diff += (out1[i] - out2[i]) * (out1[i] - out2[i])*1000000;
+    diff += (out1[i] - out2[i]) * (out1[i] - out2[i]);
     out1[i] = out2[i];
   }
 
 
-  if (diff < 1 ){
+  if (diff < EPSILON ){
     break;
   }
   
 }
-
-
 }
 }

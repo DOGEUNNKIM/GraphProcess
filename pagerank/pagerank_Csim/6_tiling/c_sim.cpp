@@ -125,23 +125,8 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
             float out1_reg = (l < BUFFER_SIZE) ? out1[u] : 0.0f;
             float score_buffer_reg_prev = (l < BUFFER_SIZE) ? score_buffer[col_idx_buffer[l] - TILE_SIZE*tile] : 0.0f;
             float score_buffer_reg;
-            //
-            // 여기서 dsp 계속 씀
-  
-  
-  
-#pragma HLS bind_op variable=score_buffer_reg op=fsub impl=fabric
-#pragma HLS bind_op variable=score_buffer_reg op=fdiv impl=fabric
-#pragma HLS bind_op variable=score_buffer_reg op=fmul impl=fabric
-#pragma HLS bind_op variable=score_buffer_reg op=fadd impl=fabric
-#pragma HLS bind_op variable=score_buffer_reg_prev op=fadd impl=fabric
             score_buffer_reg = score_buffer_reg_prev + (ALPHA *  out1_reg / out_degree_u );
             //score_buffer_reg = (l < BUFFER_SIZE) ? score_buffer_reg_prev + 1 :0;
-  
-  
-  
-  
-            //
             int idx = col_idx_buffer[l] - TILE_SIZE*tile;
   
             score_buffer[idx] = score_buffer_reg;

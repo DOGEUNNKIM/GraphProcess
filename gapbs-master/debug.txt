@@ -1,0 +1,2 @@
+iter 0
+[Node] [OldScore] [IncomingTotal] [scroe] [g.outdegree] [OutgoingContrib]

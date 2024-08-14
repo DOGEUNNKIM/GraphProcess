@@ -11,29 +11,24 @@
 //#define ALPHA 0.85
 #define MAX_ITER 1000
 //#define EPSILON 1e-6
-#define NUM_NODES 100
-#define NUM_EDGES 1000
 #define BUFFER_SIZE 16
-#define TILE_SIZE 16
+#define NUM_NODES 500
+#define NUM_EDGES 5000
+#define TILE_SIZE 100
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
 
-//#define my_float float
-
-typedef ap_fixed<32,12> my_float;
-
-
-my_float ALPHA = 0.85;
-my_float EPSILON = 1e-6;
+float ALPHA = 0.85;
+float EPSILON = 1e-6;
 
 typedef struct v_datatype { int data[VDATA_SIZE]; } v_dt;
-typedef struct v_f_datatype { my_float data[VDATA_SIZE]; } v_dt_f;
+typedef struct v_f_datatype { float data[VDATA_SIZE]; } v_dt_f;
 
 typedef struct {
     int num_nodes;
     int num_edges;
     v_dt_f *row_ptr;
     v_dt *col_idx;
-    my_float *values;
+    float *values;
 } CSRMatrix_f;
 
 typedef struct {
@@ -41,25 +36,24 @@ typedef struct {
     int num_edges;
     v_dt *row_ptr;
     v_dt *col_idx;
-    my_float *values;
+    float *values;
 } CSRMatrix;
 
 typedef struct {
     int node;
     int in_degree;
-    my_float rank;
+    float rank;
 } NodeData;
 
 
 CSRMatrix_f A;
 
-// use 1 dsp
 extern "C"{
 void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
               const v_dt *in2,  // Read-Only Vector 2 from hbm -> row ptr preprocessed
               const v_dt_f *in3,// Read-Only Vector 2 from hbm -> row ptr 
-              my_float *out1,      // Output Result to hbm -> pagerank score before
-              my_float *out2       // Output Result to hbm -> pagerank score next
+              float *out1,      // Output Result to hbm -> pagerank score before
+              float *out2       // Output Result to hbm -> pagerank score next
               ) {
 
 #pragma HLS INTERFACE m_axi port = in1 offset = slave bundle = gmem0 max_widen_bitwidth=512 
@@ -68,26 +62,24 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
 // random read -> cannot burst read
 #pragma HLS INTERFACE m_axi port = out1 offset = slave bundle = gmem3 
 #pragma HLS INTERFACE m_axi port = out2 offset = slave bundle = gmem4 
-
+float ALPHA = 0.85;
+float EPSILON = 1e-6;
 // set constant
-my_float base_score;
-#pragma HLS bind_op variable=base_score op=fsub impl=fabric
-#pragma HLS bind_op variable=base_score op=fdiv impl=fabric
-my_float a =1;
-base_score = (a - ALPHA) / NUM_NODES;
+float base_score;
+base_score = (1.0f - ALPHA) / NUM_NODES;
 
 int row_ptr_buffer[2];
 #pragma HLS array_partition variable=row_ptr_buffer complete
-my_float out_degree_buffer[2];
+float out_degree_buffer[2];
 #pragma HLS array_partition variable=out_degree_buffer complete
-my_float score_buffer[TILE_SIZE];
+float score_buffer[TILE_SIZE];
 #pragma HLS array_partition variable=score_buffer complete
 
 int col_idx_buffer[BUFFER_SIZE];
 #pragma HLS array_partition variable=col_idx_buffer factor=16 cyclic
 
-
-for (int iter = 0; iter < MAX_ITER; iter++) {
+int iter = 0;
+for (iter = 0; iter < MAX_ITER; iter++) {
   for (int i = 0; i < NUM_NODES; i ++) {
 #pragma HLS pipeline II=1
     out2[i] = base_score;
@@ -114,13 +106,11 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
       
       out_degree_buffer[0]= in3[u/16].data[u%16];
       out_degree_buffer[1]= in3[(u+1)/16].data[(u+1)%16]; 
-      my_float out_degree_u;  
-#pragma HLS bind_op variable=out_degree_u op=fsub impl=fabric
+      float out_degree_u;  
       out_degree_u = out_degree_buffer[1] - out_degree_buffer[0];
       int buffer_start = row_ptr_buffer[0];
       //push
-      for (int b = 0; b < NUM_NODES; b += BUFFER_SIZE) {
-        if(b < size_){
+      for (int b = 0; b < size_; b += BUFFER_SIZE) {
 #pragma HLS pipeline //rewind
           //prefatch col_idx_buffer
           int chunk_size = (b + BUFFER_SIZE > size_) ? size_ - b : BUFFER_SIZE;
@@ -134,10 +124,23 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
           for (int l = 0; l < BUFFER_SIZE; l++) {
 #pragma HLS unroll 
             if( l < chunk_size) {
+            float out1_reg = (l < BUFFER_SIZE) ? out1[u] : 0.0f;
+            float score_buffer_reg_prev = (l < BUFFER_SIZE) ? score_buffer[col_idx_buffer[l] - TILE_SIZE*tile] : 0.0f;
+            float score_buffer_reg;
+            //
+            // 여기서 dsp 계속 씀
+            
+            score_buffer_reg = score_buffer_reg_prev + (ALPHA *  out1_reg / out_degree_u );
+  
+  
+  
+  
+            //
             int idx = col_idx_buffer[l] - TILE_SIZE*tile;
-            score_buffer[idx] = score_buffer[idx] + (ALPHA *   out1[u] / out_degree_u );
+  
+            score_buffer[idx] = score_buffer_reg;
             }
-          }
+          
         }
       }
     }
@@ -153,7 +156,7 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
   
   //check converge & update score
   
-  my_float diff = 0;
+  float diff = 0;
   for (int i = 0; i < NUM_NODES; i += 1) {
 #pragma HLS pipeline II=1
     diff += (out1[i] - out2[i]) * (out1[i] - out2[i]);
@@ -167,7 +170,7 @@ for (int iter = 0; iter < MAX_ITER; iter++) {
   
 }
 
-
+printf("iter = %d\n", iter);
 }
 }
 
@@ -190,7 +193,7 @@ void generate_random_graph(CSRMatrix_f *A, int num_nodes, int num_edges, int *in
     A->num_edges = num_edges;
     A->row_ptr = (v_dt_f *)malloc(((num_nodes + 1) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt_f));
     A->col_idx = (v_dt *)malloc((num_edges + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
-    A->values = (my_float *)malloc(num_edges * sizeof(my_float));
+    A->values = (float *)malloc(num_edges * sizeof(float));
 
     int *out_degree = (int *)calloc(num_nodes, sizeof(int));
     Edge *edges = (Edge *)malloc(num_edges * sizeof(Edge));
@@ -255,7 +258,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     T->num_edges = A->num_edges;
     T->row_ptr = (v_dt *)malloc(((num_nodes *num_tiles  + 1) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt) * num_tiles);
     T->col_idx = (v_dt *)malloc((A->num_edges + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
-    T->values = (my_float *)malloc(A->num_edges * sizeof(my_float));
+    T->values = (float *)malloc(A->num_edges * sizeof(float));
 
     // Create num_tiles csr (row ptr & col index)
     CSRMatrix *tile_CSRMatrix = (CSRMatrix *)malloc(num_tiles * sizeof(CSRMatrix));
@@ -275,7 +278,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     }
     for (int i = 0; i < num_tiles; i++) {
         tile_CSRMatrix[i].col_idx = (v_dt *)malloc(((tile_CSRMatrix[i].num_edges) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
-        tile_CSRMatrix[i].values = (my_float *)malloc((tile_CSRMatrix[i].num_edges) * sizeof(my_float));
+        tile_CSRMatrix[i].values = (float *)malloc((tile_CSRMatrix[i].num_edges) * sizeof(float));
         tile_CSRMatrix[i].row_ptr[0].data[0] = 0; // Initialize the first element of row_ptr
     }
     int col_idx_ptr[num_tiles] = {0};
@@ -362,6 +365,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     //}
     //printf("\n");
 
+    T->row_ptr[0].data[0] = 0;
     // Free allocated memory for tile_CSRMatrix
     for (int t = 0; t < num_tiles; t++) {
         free(tile_CSRMatrix[t].row_ptr);
@@ -372,11 +376,11 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
 }
 
 
-void pageRank_CSR(const CSRMatrix_f *A, my_float *r) {
+void pageRank_CSR(const CSRMatrix_f *A, float *r) {
     int num_nodes = A->num_nodes;
-    my_float *r_new = (my_float *)malloc(num_nodes * sizeof(my_float));
-    my_float a =1;
-    my_float base_score = (a - ALPHA) / num_nodes;
+    float *r_new = (float *)malloc(num_nodes * sizeof(float));
+    float a =1;
+    float base_score = (a - ALPHA) / num_nodes;
 
     for (int i = 0; i < num_nodes; i++) {
         r[i] = 1.0 / num_nodes;
@@ -408,7 +412,7 @@ printf("iter = %d\n", iter);
             }
         }
 
-        my_float diff = 0.0;
+        float diff = 0.0;
         for (int i = 0; i < num_nodes; i++) {
             diff += (r_new[i] - r[i])*(r_new[i] - r[i]) ;
         }
@@ -416,7 +420,7 @@ printf("iter = %d\n", iter);
             break;
         }
 
-        memcpy(r, r_new, num_nodes * sizeof(my_float));
+        memcpy(r, r_new, num_nodes * sizeof(float));
     }
 
     free(r_new);
@@ -435,13 +439,13 @@ int main() {
     int *in_degree = (int *)calloc(NUM_NODES, sizeof(int));
     generate_random_graph(&A, NUM_NODES, NUM_EDGES, in_degree);
 
-    my_float *r = (my_float *)malloc(A.num_nodes * sizeof(my_float));
+    float *r = (float *)malloc(A.num_nodes * sizeof(float));
     
     // PageRank 계산
     pageRank_CSR(&A, r);
     
-    my_float score1[NUM_NODES];
-    my_float score2[NUM_NODES];
+    float score1[NUM_NODES];
+    float score2[NUM_NODES];
 
     for(int i = 0; i < NUM_NODES; i++){
         score1[i] = 1.0 / NUM_NODES;
@@ -460,27 +464,23 @@ int main() {
         nodes[i].rank = r[i];
     }
 
-    my_float sum = 0.0;
+    float sum = 0.0;
     for (int i = 0; i < NUM_NODES; i++) {
         sum += (score2[i] - nodes[i].rank)*(score2[i] - nodes[i].rank);
     }
     std::cout << "Diff: " << static_cast<float>(sum) << std::endl;
     
-    
+    if(sum < EPSILON){
+        printf("TEST PASS\n");
+        
+    }
 
     // PageRank 순으로 정렬하여 출력
-    //qsort(nodes, A.num_nodes, sizeof(NodeData), compare_by_rank);
-    //printf("Sorted by rank:\n");
-    sum = 0.0;
-    for (int i = 0; i < A.num_nodes; i++) {
-        //float rank_as_int = std::stof(nodes[i].rank.to_string());
-        //printf("Node %d: in-degree %d, rank %f\n", nodes[i].node, nodes[i].in_degree, rank_as_int);
-        sum += nodes[i].rank;
-        std::cout << "Value1: " << static_cast<float>(nodes[i].rank) << std::endl;
-        std::cout << "Value2: " << static_cast<float>(score2[i]) << std::endl;
-    }
-    //float sum_as_int = std::stof(sum.to_string());
-    //printf("sum %f\n", sum_as_int);
+    //sum = 0.0;
+    //for (int i = 0; i < A.num_nodes; i++) {
+    //    std::cout << "Value1: " << static_cast<float>(nodes[i].rank) << std::endl;
+    //    std::cout << "Value2: " << static_cast<float>(score1[i]) << std::endl;
+    //}
 
 
     // 메모리 해제

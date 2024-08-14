@@ -1,37 +1,3 @@
-/**********
-Copyright (c) 2020, Xilinx, Inc.
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its contributors
-may be used to endorse or promote products derived from this software
-without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED.
-IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
-INDIRECT,
-INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO,
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-THIS SOFTWARE,
-EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-**********/
 #include <cstring>
 #include <iostream>
 #include <chrono>
@@ -45,15 +11,19 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "experimental/xrt_device.h"
 #include "experimental/xrt_kernel.h"
 
+
 #define VDATA_SIZE 16
-#define ALPHA 0.85
+//#define ALPHA 0.85
 #define MAX_ITER 1000
-#define EPSILON 1e-6
-#define NUM_NODES 100
-#define NUM_EDGES 1000
-#define BUFFER_SIZE 16
-#define TILE_SIZE 16
+//#define EPSILON 1e-6
+#define NUM_NODES 2048
+#define NUM_EDGES 4096*16
+#define TILE_SIZE 512
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
+
+float ALPHA = 0.85;
+float EPSILON = 1e-6;
+
 
 typedef struct v_datatype { int data[VDATA_SIZE]; } v_dt;
 typedef struct v_f_datatype { float data[VDATA_SIZE]; } v_dt_f;
@@ -108,6 +78,7 @@ void generate_random_graph(CSRMatrix_f *A, int num_nodes, int num_edges, int *in
     int edge_count = 0;
 
     srand(time(NULL));
+    #pragma omp parallel
     while (edge_count < num_edges) {
         int src = rand() % num_nodes;
         int dst = rand() % num_nodes;
@@ -123,17 +94,20 @@ void generate_random_graph(CSRMatrix_f *A, int num_nodes, int num_edges, int *in
 
     // Initialize row_ptr
     A->row_ptr[0].data[0] = 0.0f;
+    #pragma omp parallel for
     for (int i = 1; i <= num_nodes; i++) {
         A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] = A->row_ptr[(i - 1) / VDATA_SIZE].data[(i - 1) % VDATA_SIZE] + out_degree[i - 1];
     }
 
     // Temporary array to keep track of positions in col_idx
     int *current_pos = (int *)malloc(num_nodes * sizeof(int));
+    #pragma omp parallel for
     for (int i = 0; i < num_nodes; i++) {
         current_pos[i] = A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
     }
 
     // Fill col_idx based on row_ptr
+    #pragma omp parallel for
     for (int i = 0; i < num_edges; i++) {
         int src = edges[i].src;
         int dst = edges[i].dst;
@@ -146,7 +120,6 @@ void generate_random_graph(CSRMatrix_f *A, int num_nodes, int num_edges, int *in
     //    printf("%d ", A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE]);
     //}
     //printf("\n");
-//
     //printf("col_idx\n");
     //for (int i = 0; i < num_edges; i++) {
     //    printf("%d ", A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE]);
@@ -170,7 +143,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
 
     // Create num_tiles csr (row ptr & col index)
     CSRMatrix *tile_CSRMatrix = (CSRMatrix *)malloc(num_tiles * sizeof(CSRMatrix));
-
+    #pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         tile_CSRMatrix[t].num_nodes = num_nodes;
         tile_CSRMatrix[t].num_edges = 0; // This will be adjusted later
@@ -178,18 +151,20 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
         tile_CSRMatrix[t].col_idx = NULL; // This will be allocated later
         tile_CSRMatrix[t].values = NULL; // This will be allocated later
     }
-    
     // Count the edges for each tile
+    //#pragma omp parallel for
     for (int i = 0; i < A->num_edges; i++) {
         int index = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE] / tile_size;
         tile_CSRMatrix[index].num_edges++;
     }
+    //#pragma omp parallel for
     for (int i = 0; i < num_tiles; i++) {
         tile_CSRMatrix[i].col_idx = (v_dt *)malloc(((tile_CSRMatrix[i].num_edges) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
         tile_CSRMatrix[i].values = (float *)malloc((tile_CSRMatrix[i].num_edges) * sizeof(float));
         tile_CSRMatrix[i].row_ptr[0].data[0] = 0; // Initialize the first element of row_ptr
     }
     int col_idx_ptr[num_tiles] = {0};
+    //#pragma omp parallel for
     for (int i = 0; i < A->num_edges; i++) {
         int index = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE] / tile_size;
         tile_CSRMatrix[index].col_idx[col_idx_ptr[index] / VDATA_SIZE].data[col_idx_ptr[index] % VDATA_SIZE] = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
@@ -206,12 +181,13 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     //printf("\n");
 
     // Populate row_ptr for each tile
+    //#pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         for (int i = 0; i <= num_nodes; i++) {
             tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] = 0;
         }
     }
-
+    //#pragma omp parallel for
     for (int i = 0; i < num_nodes; i++) {
         int row_start = A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
         int row_end = A->row_ptr[(i + 1) / VDATA_SIZE].data[(i + 1) % VDATA_SIZE];
@@ -223,7 +199,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
             tile_CSRMatrix[tile_index].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE]++;
         }
     }
-
+    //#pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         int cumulative_sum = 0;
         for (int i = 0; i <= num_nodes; i++) {
@@ -232,9 +208,8 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
             cumulative_sum += temp;
         }
     }
-
-
     //printf("tile row_ptr\n");
+    //#pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         for (int i = 0; i < tile_CSRMatrix[t].num_nodes+1; i++) {
             //printf("%d ", tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE]);
@@ -244,6 +219,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
         }
         //printf("\n");
     }
+    //#pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         for (int i = 1; i <= num_nodes; i++) {
              T->row_ptr[(t*num_nodes + i) / VDATA_SIZE].data[(t*num_nodes + i) % VDATA_SIZE] =  tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
@@ -251,7 +227,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     }
 
     int j=0;
-
+    //#pragma omp parallel for
     for (int t = 0; t < num_tiles; t++) {
         if(t>0){
           j += (tile_CSRMatrix[t-1].num_edges);
@@ -272,7 +248,7 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
     //    printf("%d ", T->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE]);
     //}
     //printf("\n");
-
+    T->row_ptr[0].data[0] = 0;
     // Free allocated memory for tile_CSRMatrix
     for (int t = 0; t < num_tiles; t++) {
         free(tile_CSRMatrix[t].row_ptr);
@@ -285,7 +261,8 @@ void tile_CSRMatrix_func(const CSRMatrix_f *A, CSRMatrix *T, int tile_size) {
 void pageRank_CSR(const CSRMatrix_f *A, float *r) {
     int num_nodes = A->num_nodes;
     float *r_new = (float *)malloc(num_nodes * sizeof(float));
-    float base_score = (1.0 - ALPHA) / num_nodes;
+    float one = 1;
+    float base_score = (one - ALPHA) / num_nodes;
 
     for (int i = 0; i < num_nodes; i++) {
         r[i] = 1.0 / num_nodes;
@@ -297,7 +274,6 @@ void pageRank_CSR(const CSRMatrix_f *A, float *r) {
             r_new[i] = base_score;
         }
 
-        #pragma omp parallel for
         for (int u = 0; u < num_nodes; u++) {
             int buffer_start = A->row_ptr[u / VDATA_SIZE].data[u % VDATA_SIZE];
             int buffer_end = A->row_ptr[(u + 1) / VDATA_SIZE].data[(u + 1) % VDATA_SIZE];
@@ -311,21 +287,21 @@ void pageRank_CSR(const CSRMatrix_f *A, float *r) {
                     col_idx_buffer[k] = A->col_idx[(buffer_start + b + k) / VDATA_SIZE].data[(buffer_start + b + k) % VDATA_SIZE];
                 }
 
-                #pragma omp simd
+                //#pragma omp simd
                 for (int k = 0; k < chunk_size; k++) {
                     int v = col_idx_buffer[k];
-                    #pragma omp atomic
+                    //#pragma omp atomic
                     r_new[v] += ALPHA * r[u] / out_degree_u;
                 }
             }
         }
 
         float diff = 0.0;
-        #pragma omp parallel for reduction(+:diff)
         for (int i = 0; i < num_nodes; i++) {
             diff += (r_new[i] - r[i])*(r_new[i] - r[i]) ;
         }
         if (diff < EPSILON) {
+            printf("CPU iter = %d\n", iter);
             break;
         }
 
@@ -370,17 +346,7 @@ int main(int argc, char **argv) {
       nodes[i].in_degree = in_degree[i];
       nodes[i].rank = r[i];
   }
-
-  //Sort by PageRank
-  //qsort(nodes, A.num_nodes, sizeof(NodeData), compare_by_rank);
-  printf("Sorted by rank:\n");
-  float sum = 0.0;
-  for (int i = 0; i < A.num_nodes; i++) {
-      printf("Node %d: in-degree %d, rank %f\n", nodes[i].node, nodes[i].in_degree, nodes[i].rank);
-      sum += nodes[i].rank;
-  }
-  
-  printf("sum %f\n", sum);
+    
   // The host code assumes there is a single device and opening a device by
   // device index 0. If there are multiple devices then this device index needed
   // to be adjusted. The user can get the list of the devices and device indices
@@ -425,6 +391,9 @@ int main(int argc, char **argv) {
   //
 
   vector<float> bufReference(A.num_nodes);
+
+  float one =1;
+  float zero = 0;
   
   for (int i = 0; i < A.num_edges; ++i) {
     bo0_map[i] = T.col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
@@ -436,10 +405,10 @@ int main(int argc, char **argv) {
     bo2_map[i] = A.row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
   for (int i = 0; i < A.num_nodes; ++i) {
-    bo_score_map_1[i] = 1.0/A.num_nodes;
+    bo_score_map_1[i] = one/A.num_nodes;
   }
   for (int i = 0; i < A.num_nodes; ++i) {
-    bo_score_map_2[i] = 0.0;
+    bo_score_map_2[i] = zero;
   }
   for (int i = 0; i < A.num_nodes; ++i) {
     bufReference[i] = nodes[i].rank;
@@ -515,27 +484,25 @@ int main(int argc, char **argv) {
   free(nodes);
 
 
-  //Check FPGA result
-
-  sum = 0.0;
-  for (int i = 0; i < A.num_nodes; i++) {
-      printf("Node rank %f\n", bo_score_map_2[i]);
-      sum += bo_score_map_2[i];
-  }
-  printf("sum %f\n", sum);
+  //Check result
+  //for (int i = 0; i < A.num_nodes; i++) {
+  //    std::cout << "Node rank1: " << static_cast<float>(nodes[i].rank) << std::endl;
+  //    std::cout << "Node rank2 " << static_cast<float>(bo_score_map_2[i]) << std::endl;
+  //}
+    
 
   // Validate our results
   
   auto compare_begin = std::chrono::high_resolution_clock::now();
 
 
-  float diff = 0.0f;
+  float diff = 0;
   for (int i = 0; i < A.num_nodes; i++) {
       diff += (bo_score_map_2[i] - bufReference[i])*(bo_score_map_2[i] - bufReference[i]) ;
   }
-  printf("diff %f\n", diff);
+  std::cout << "Diff: " << static_cast<float>(diff) << std::endl;
 
-  if (diff > 0.002)
+  if (diff > EPSILON*100)
     throw std::runtime_error("Score does not match reference");
 
   std::cout << "TEST PASSED\n";
