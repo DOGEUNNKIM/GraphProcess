@@ -14,9 +14,9 @@
 #include "experimental/xrt_kernel.h"
 
 #define VDATA_SIZE 8
-#define TILE_SIZE 4847571
-#define NUM_NODES 4847571
-#define NUM_EDGES 68993773
+#define TILE_SIZE 524288
+#define NUM_NODES 1632803
+#define NUM_EDGES 30622564
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
 #define START_VERTEX 0
 
@@ -260,20 +260,19 @@ int main(int  argc, char **argv) {
   CSRMatrix A;
 
   printf("START LOAD GRAPH\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/csr_matrix_int64_debug.bin");
-
+  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
   printf("FINISH LOAD GRAPH\n");
 
   int64_t *r = (int64_t  *)malloc(A.num_nodes * sizeof(int64_t ));
 
-  auto cpu_begin = std::chrono::high_resolution_clock::now();
+  //auto cpu_begin = std::chrono::high_resolution_clock::now();
 
   //Do BFS
   printf("START CPU BFS\n");
   bfs_CSR(&A, START_VERTEX ,r);
   printf("FINISH CPU BFS\n");
 
-  auto cpu_end = std::chrono::high_resolution_clock::now();
+  //auto cpu_end = std::chrono::high_resolution_clock::now();
 
   //PREPROCESS 
   CSRMatrix T;
@@ -297,8 +296,11 @@ int main(int  argc, char **argv) {
     }
     frontier1[0] = START_VERTEX;
     Vprop1[START_VERTEX] = 0;
+
+  auto cpu_begin = std::chrono::high_resolution_clock::now();
     bfs_hls(T.col_idx, T.row_ptr, frontier1, Vprop1);
 
+  auto cpu_end = std::chrono::high_resolution_clock::now();
 
 //
 ////
@@ -313,11 +315,9 @@ int main(int  argc, char **argv) {
   std::cout << "Load the xclbin " << xclbin_file_name << std::endl;
   auto uuid = device.load_xclbin(xclbin_file_name);
   
-  int64_t row_ptr_process_bytes_1 = A.num_nodes*NUM_TILES  + 1;
-  int64_t row_ptr_process_bytes = sizeof(int64_t ) * row_ptr_process_bytes_1;
-  int64_t col_idx_process_bytes = sizeof(int64_t ) * A.num_edges;
-  int64_t frontier_node_bytes = sizeof(int64_t) * A.num_nodes;
-  int64_t Vprop_node_bytes = sizeof(int64_t ) * A.num_nodes;
+  int64_t row_ptr_process_bytes = sizeof(int64_t ) * (A.num_nodes*NUM_TILES  + 1);
+  int64_t col_idx_process_bytes = sizeof(int64_t ) * (A.num_edges+1);
+  int64_t node_bytes = sizeof(int64_t) * A.num_nodes;
 
   auto krnl = xrt::kernel(device, uuid, "bfs");
 
@@ -326,23 +326,23 @@ int main(int  argc, char **argv) {
   printf("col done\n");
   auto row = xrt::bo(device, row_ptr_process_bytes, krnl.group_id(1));
   printf("row done\n");
-  auto frontier = xrt::bo(device, frontier_node_bytes, krnl.group_id(2));
+  auto frontier = xrt::bo(device, node_bytes, krnl.group_id(2));
   printf("frontier done\n");
-  auto Vprop = xrt::bo(device, Vprop_node_bytes, krnl.group_id(3));
-  printf("Vprop done\n");
+  auto Vprop2 = xrt::bo(device, node_bytes, krnl.group_id(3));
+  printf("Vprop2 done\n");
 
   std::cout << "Map Buffer in Global Memory\n";
   // Map the contents of the buffer object into host memory
   auto col_map = col.map<int64_t*>();
   auto row_map = row.map<int64_t*>();
   auto frontier_map = frontier.map<int64_t*>();
-  auto Vprop_map = Vprop.map<int64_t*>();
+  auto Vprop_map = Vprop2.map<int64_t*>();
 
   std::cout << "Fill Buffer in Global Memory\n";
   std::fill(col_map, col_map + A.num_edges, 0);
   std::fill(row_map, row_map + A.num_nodes*NUM_TILES + 1, 0);
-  std::fill(frontier_map, frontier_map + A.num_nodes, -1);
-  std::fill(Vprop_map, Vprop_map + A.num_nodes, -1);
+  std::fill(frontier_map, frontier_map + A.num_nodes,  (int64_t)-1);
+  std::fill(Vprop_map, Vprop_map + A.num_nodes, (int64_t)-1);
   
   // Create the test data
   vector<int64_t> bufReference(A.num_nodes);
@@ -354,14 +354,14 @@ int main(int  argc, char **argv) {
     row_map[i] = T.row_ptr[i / VDATA_SIZE ].data[i % VDATA_SIZE];
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
-    Vprop_map[i] = -1;
-  }
-  for (int64_t  i = 0; i < A.num_nodes; ++i) {
     frontier_map[i] = -1;
   }
+  //for (int64_t  i = 0; i < A.num_nodes; ++i) {
+  //  Vprop_map[i] = (int64_t)-1;
+  //}
   
   frontier_map[0] = START_VERTEX;
-  Vprop_map[START_VERTEX] = 0;
+  Vprop_map[START_VERTEX] = (int64_t)0;
 
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
     bufReference[i] = nodes[i].rank;
@@ -380,7 +380,7 @@ int main(int  argc, char **argv) {
   col.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   row.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   frontier.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-  Vprop.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+  Vprop2.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   
   auto host_to_fpga_end = std::chrono::high_resolution_clock::now();
   /////////////////////////////////////////////////////////////////////////////
@@ -389,7 +389,7 @@ int main(int  argc, char **argv) {
   std::cout << "synchronize input buffer data to device global memory finish\n";
   auto fpga_cal_begin = std::chrono::high_resolution_clock::now();
   std::cout << "START FPGA" << std::endl;
-  auto run = krnl(col, row, frontier, Vprop);
+  auto run = krnl(col, row, frontier, Vprop2,NUM_NODES);
   run.wait();
   std::cout << "FINISH FPGA" << std::endl;
   auto fpga_cal_end = std::chrono::high_resolution_clock::now();
@@ -400,8 +400,10 @@ int main(int  argc, char **argv) {
   //////////////////////////////////////////////////////////////////////////////
   auto fpga_to_host_start = std::chrono::high_resolution_clock::now();
   
+  col.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+  row.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   frontier.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
-  Vprop.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+  Vprop2.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
 
   auto fpga_to_host_end = std::chrono::high_resolution_clock::now();
   /////////////////////////////////////////////////////////////////////////////
@@ -439,9 +441,9 @@ int main(int  argc, char **argv) {
   auto compare_begin = std::chrono::high_resolution_clock::now();
 
   printf("CHECK FRONTIER\n");
-  for (int64_t i = 0; i < 100; i++) {
-      printf("frontier_map[%ld] = %ld\n",i, frontier_map[i]);
-  }
+  //for (int64_t i = 0; i < 100; i++) {
+  //    printf("frontier_map[%ld] = %ld\n",i, frontier_map[i]);
+  //}
   for (int64_t i = 0; i < A.num_nodes; i++) {
       if (frontier_map[i] != frontier1[i]){
           cout << i << endl;
@@ -456,19 +458,25 @@ int main(int  argc, char **argv) {
   //              frontier1[i], bufReference[frontier1[i]] 
   //              );
   //}
-  //for (int64_t i = 0; i < A.num_nodes; i++) {
-  //    if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
-  //        printf("i = %ld\n",i);
-  //        printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier1[i]]);
-  //        throw std::runtime_error("Score does not match reference");
-  //    }
+  //for (int64_t i = 0; i < 100; i++) {
+  //    printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop_map[frontier_map[i]]);
   //}
+  for (int64_t i = 0; i < 100; i++) {
+      printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop1[frontier_map[i]]);
+  }
   for (int64_t i = 0; i < A.num_nodes; i++) {
-      if (Vprop_map[i] != bufReference[i]){
+      if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
           printf("i = %ld\n",i);
+          printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier_map[i]]);
           throw std::runtime_error("Score does not match reference");
       }
   }
+  //for (int64_t i = 0; i < A.num_nodes; i++) {
+  //    if (Vprop_map[i] != bufReference[i]){
+  //        printf("i = %ld\n",i);
+  //        throw std::runtime_error("Score does not match reference");
+  //    }
+  //}
   auto compare_end = std::chrono::high_resolution_clock::now();
   std::cout << "TEST PASSED\n";
 

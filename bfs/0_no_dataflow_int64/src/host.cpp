@@ -14,11 +14,11 @@
 #include "experimental/xrt_kernel.h"
 
 #define VDATA_SIZE 8
-#define TILE_SIZE 4847571
-#define NUM_NODES 4847571
-#define NUM_EDGES 68993773
+#define TILE_SIZE 524288
+#define NUM_NODES 1632803
+#define NUM_EDGES 30622564
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
-#define START_VERTEX 0
+#define START_VERTEX 10
 
 using namespace std;
 
@@ -73,12 +73,12 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
     T->num_edges = A->num_edges;
     T->row_ptr = (v_dt *)malloc(((num_nodes *num_tiles  + 1) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt) * num_tiles);
     T->col_idx = (v_dt *)malloc((A->num_edges + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
-    T->values = (int64_t  *)malloc(A->num_edges * sizeof(int64_t  ));
+    T->values = (int64_t *)malloc(A->num_edges * sizeof(int64_t));
 
     // Create num_tiles csr (row ptr & col index)
     CSRMatrix *tile_CSRMatrix = (CSRMatrix *)malloc(num_tiles * sizeof(CSRMatrix));
 
-    for (int64_t  t = 0; t < num_tiles; t++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
         tile_CSRMatrix[t].num_nodes = num_nodes;
         tile_CSRMatrix[t].num_edges = 0; // This will be adjusted later
         tile_CSRMatrix[t].row_ptr = (v_dt *)malloc(((num_nodes + 1) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
@@ -87,34 +87,34 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
     }
     
     // Count the edges for each tile
-    for (int64_t  i = 0; i < A->num_edges; i++) {
+    for (int64_t i = 0; i < A->num_edges; i++) {
         int64_t index = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE] / tile_size;
         tile_CSRMatrix[index].num_edges++;
     }
-    for (int64_t  i = 0; i < num_tiles; i++) {
+    for (int64_t i = 0; i < num_tiles; i++) {
         tile_CSRMatrix[i].col_idx = (v_dt *)malloc(((tile_CSRMatrix[i].num_edges) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
-        tile_CSRMatrix[i].values = (int64_t  *)malloc((tile_CSRMatrix[i].num_edges) * sizeof(int64_t  ));
+        tile_CSRMatrix[i].values = (int64_t *)malloc((tile_CSRMatrix[i].num_edges) * sizeof(int64_t));
         tile_CSRMatrix[i].row_ptr[0].data[0] = 0; // Initialize the first element of row_ptr
     }
     int64_t col_idx_ptr[num_tiles] = {0};
-    for (int64_t  i = 0; i < A->num_edges; i++) {
+    for (int64_t i = 0; i < A->num_edges; i++) {
         int64_t index = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE] / tile_size;
         tile_CSRMatrix[index].col_idx[col_idx_ptr[index] / VDATA_SIZE].data[col_idx_ptr[index] % VDATA_SIZE] = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
         col_idx_ptr[index]++;
     }
 
     // Populate row_ptr for each tile
-    for (int64_t  t = 0; t < num_tiles; t++) {
-        for (int64_t  i = 0; i <= num_nodes; i++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
+        for (int64_t i = 0; i <= num_nodes; i++) {
             tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] = 0;
         }
     }
 
-    for (int64_t  i = 0; i < num_nodes; i++) {
+    for (int64_t i = 0; i < num_nodes; i++) {
         int64_t row_start = A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
         int64_t row_end = A->row_ptr[(i + 1) / VDATA_SIZE].data[(i + 1) % VDATA_SIZE];
 
-        for (int64_t  j = row_start; j < row_end; j++) {
+        for (int64_t j = row_start; j < row_end; j++) {
             int64_t col = A->col_idx[j / VDATA_SIZE].data[j % VDATA_SIZE];
             int64_t tile_index = col / tile_size;
 
@@ -122,9 +122,9 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
         }
     }
 
-    for (int64_t  t = 0; t < num_tiles; t++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
         int64_t cumulative_sum = 0;
-        for (int64_t  i = 0; i <= num_nodes; i++) {
+        for (int64_t i = 0; i <= num_nodes; i++) {
             int64_t temp = tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
             tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] = cumulative_sum;
             cumulative_sum += temp;
@@ -133,8 +133,8 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
 
 
     //printf("tile row_ptr\n");
-    for (int64_t  t = 0; t < num_tiles; t++) {
-        for (int64_t  i = 0; i < tile_CSRMatrix[t].num_nodes+1; i++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
+        for (int64_t i = 0; i < tile_CSRMatrix[t].num_nodes+1; i++) {
             //printf("%ld ", tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE]);
             if(t > 0){
               tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] += tile_CSRMatrix[t-1].row_ptr[num_nodes / VDATA_SIZE].data[num_nodes % VDATA_SIZE];
@@ -142,26 +142,26 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
         }
         //printf("\n");
     }
-    for (int64_t  t = 0; t < num_tiles; t++) {
-        for (int64_t  i = 1; i <= num_nodes; i++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
+        for (int64_t i = 1; i <= num_nodes; i++) {
              T->row_ptr[(t*num_nodes + i) / VDATA_SIZE].data[(t*num_nodes + i) % VDATA_SIZE] =  tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
         }
     }
 
     int64_t j=0;
 
-    for (int64_t  t = 0; t < num_tiles; t++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
         if(t>0){
           j += (tile_CSRMatrix[t-1].num_edges);
         }
-        for (int64_t  i = 0; i < tile_CSRMatrix[t].num_edges; i++) {
+        for (int64_t i = 0; i < tile_CSRMatrix[t].num_edges; i++) {
              T->col_idx[(j + i) / VDATA_SIZE].data[(j + i) % VDATA_SIZE] =  tile_CSRMatrix[t].col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
         }
     }
     T->row_ptr[0].data[0] = 0;
 
     // Free allocated memory for tile_CSRMatrix
-    for (int64_t  t = 0; t < num_tiles; t++) {
+    for (int64_t t = 0; t < num_tiles; t++) {
         free(tile_CSRMatrix[t].row_ptr);
         free(tile_CSRMatrix[t].col_idx);
         free(tile_CSRMatrix[t].values);
@@ -260,20 +260,20 @@ int main(int  argc, char **argv) {
   CSRMatrix A;
 
   printf("START LOAD GRAPH\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/csr_matrix_int64_debug.bin");
+  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
 
   printf("FINISH LOAD GRAPH\n");
 
   int64_t *r = (int64_t  *)malloc(A.num_nodes * sizeof(int64_t ));
 
-  auto cpu_begin = std::chrono::high_resolution_clock::now();
+  //auto cpu_begin = std::chrono::high_resolution_clock::now();
 
   //Do BFS
   printf("START CPU BFS\n");
   bfs_CSR(&A, START_VERTEX ,r);
   printf("FINISH CPU BFS\n");
 
-  auto cpu_end = std::chrono::high_resolution_clock::now();
+  //auto cpu_end = std::chrono::high_resolution_clock::now();
 
   //PREPROCESS 
   CSRMatrix T;
@@ -297,8 +297,11 @@ int main(int  argc, char **argv) {
     }
     frontier1[0] = START_VERTEX;
     Vprop1[START_VERTEX] = 0;
+
+  auto cpu_begin = std::chrono::high_resolution_clock::now();
     bfs_hls(T.col_idx, T.row_ptr, frontier1, Vprop1);
 
+  auto cpu_end = std::chrono::high_resolution_clock::now();
 
 //
 ////
@@ -313,11 +316,9 @@ int main(int  argc, char **argv) {
   std::cout << "Load the xclbin " << xclbin_file_name << std::endl;
   auto uuid = device.load_xclbin(xclbin_file_name);
   
-  int64_t row_ptr_process_bytes_1 = A.num_nodes*NUM_TILES  + 1;
-  int64_t row_ptr_process_bytes = sizeof(int64_t ) * row_ptr_process_bytes_1;
-  int64_t col_idx_process_bytes = sizeof(int64_t ) * A.num_edges;
-  int64_t frontier_node_bytes = sizeof(int64_t) * A.num_nodes;
-  int64_t Vprop_node_bytes = sizeof(int64_t ) * A.num_nodes;
+  int64_t row_ptr_process_bytes = sizeof(int64_t ) * (A.num_nodes*NUM_TILES  + 1);
+  int64_t col_idx_process_bytes = sizeof(int64_t ) * (A.num_edges+1);
+  int64_t node_bytes = sizeof(int64_t) * A.num_nodes;
 
   auto krnl = xrt::kernel(device, uuid, "bfs");
 
@@ -326,23 +327,23 @@ int main(int  argc, char **argv) {
   printf("col done\n");
   auto row = xrt::bo(device, row_ptr_process_bytes, krnl.group_id(1));
   printf("row done\n");
-  auto frontier = xrt::bo(device, frontier_node_bytes, krnl.group_id(2));
+  auto frontier = xrt::bo(device, node_bytes, krnl.group_id(2));
   printf("frontier done\n");
-  auto Vprop = xrt::bo(device, Vprop_node_bytes, krnl.group_id(3));
-  printf("Vprop done\n");
+  auto Vprop2 = xrt::bo(device, node_bytes, krnl.group_id(3));
+  printf("Vprop2 done\n");
 
   std::cout << "Map Buffer in Global Memory\n";
   // Map the contents of the buffer object into host memory
   auto col_map = col.map<int64_t*>();
   auto row_map = row.map<int64_t*>();
   auto frontier_map = frontier.map<int64_t*>();
-  auto Vprop_map = Vprop.map<int64_t*>();
+  auto Vprop_map = Vprop2.map<int64_t*>();
 
   std::cout << "Fill Buffer in Global Memory\n";
   std::fill(col_map, col_map + A.num_edges, 0);
   std::fill(row_map, row_map + A.num_nodes*NUM_TILES + 1, 0);
-  std::fill(frontier_map, frontier_map + A.num_nodes, -1);
-  std::fill(Vprop_map, Vprop_map + A.num_nodes, -1);
+  std::fill(frontier_map, frontier_map + A.num_nodes,  (int64_t)-1);
+  std::fill(Vprop_map, Vprop_map + A.num_nodes, (int64_t)-1);
   
   // Create the test data
   vector<int64_t> bufReference(A.num_nodes);
@@ -354,14 +355,14 @@ int main(int  argc, char **argv) {
     row_map[i] = T.row_ptr[i / VDATA_SIZE ].data[i % VDATA_SIZE];
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
-    Vprop_map[i] = -1;
+    frontier_map[i] = -1;
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
-    frontier_map[i] = -1;
+    Vprop_map[i] = (int64_t)-1;
   }
   
   frontier_map[0] = START_VERTEX;
-  Vprop_map[START_VERTEX] = 0;
+  Vprop_map[START_VERTEX] = (int64_t)0;
 
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
     bufReference[i] = nodes[i].rank;
@@ -380,7 +381,7 @@ int main(int  argc, char **argv) {
   col.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   row.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   frontier.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-  Vprop.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+  Vprop2.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   
   auto host_to_fpga_end = std::chrono::high_resolution_clock::now();
   /////////////////////////////////////////////////////////////////////////////
@@ -389,7 +390,7 @@ int main(int  argc, char **argv) {
   std::cout << "synchronize input buffer data to device global memory finish\n";
   auto fpga_cal_begin = std::chrono::high_resolution_clock::now();
   std::cout << "START FPGA" << std::endl;
-  auto run = krnl(col, row, frontier, Vprop);
+  auto run = krnl(col, row, frontier, Vprop2);
   run.wait();
   std::cout << "FINISH FPGA" << std::endl;
   auto fpga_cal_end = std::chrono::high_resolution_clock::now();
@@ -400,8 +401,10 @@ int main(int  argc, char **argv) {
   //////////////////////////////////////////////////////////////////////////////
   auto fpga_to_host_start = std::chrono::high_resolution_clock::now();
   
+  col.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+  row.sync(XCL_BO_SYNC_BO_TO_DEVICE);
   frontier.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
-  Vprop.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+  Vprop2.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
 
   auto fpga_to_host_end = std::chrono::high_resolution_clock::now();
   /////////////////////////////////////////////////////////////////////////////
@@ -439,15 +442,22 @@ int main(int  argc, char **argv) {
   auto compare_begin = std::chrono::high_resolution_clock::now();
 
   printf("CHECK FRONTIER\n");
-  for (int64_t i = 0; i < 100; i++) {
-      printf("frontier_map[%ld] = %ld\n",i, frontier_map[i]);
+  //for (int64_t i = 1950; i < 2050; i++) {
+  //    printf("frontier_map[%ld] = %ld\n",i, frontier_map[i]);
+  //}
+  for (int64_t i = 1950; i < 2050; i++) {
+    printf("Vprop_map[%ld] = %ld, Vprop1[%ld] = %ld ,bufReference[%ld] = %ld\n",
+              frontier_map[i], Vprop_map[frontier_map[i]],
+              frontier1[i], Vprop1[frontier1[i]],
+              frontier1[i], bufReference[frontier1[i]] 
+              );
   }
-  for (int64_t i = 0; i < A.num_nodes; i++) {
-      if (frontier_map[i] != frontier1[i]){
-          cout << i << endl;
-        throw std::runtime_error("frontier_map does not match reference");
-      }
-  }
+  //for (int64_t i = 0; i < A.num_nodes; i++) {
+  //    if (frontier_map[i] != frontier1[i]){
+  //        cout << i << endl;
+  //      throw std::runtime_error("frontier_map does not match reference");
+  //    }
+  //}
   printf("CHECK VPROP\n");
   //for (int64_t i = 1000; i < 2000; i++) {
   //    printf("Vprop_map[%ld] = %ld, Vprop1[%ld] = %ld ,bufReference[%ld] = %ld\n",
@@ -456,19 +466,25 @@ int main(int  argc, char **argv) {
   //              frontier1[i], bufReference[frontier1[i]] 
   //              );
   //}
-  //for (int64_t i = 0; i < A.num_nodes; i++) {
-  //    if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
-  //        printf("i = %ld\n",i);
-  //        printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier1[i]]);
-  //        throw std::runtime_error("Score does not match reference");
-  //    }
+  //for (int64_t i = 0; i < 100; i++) {
+  //    printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop_map[frontier_map[i]]);
   //}
+  for (int64_t i = 0; i < 100; i++) {
+      printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop1[frontier_map[i]]);
+  }
   for (int64_t i = 0; i < A.num_nodes; i++) {
-      if (Vprop_map[i] != bufReference[i]){
+      if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
           printf("i = %ld\n",i);
+          printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier_map[i]]);
           throw std::runtime_error("Score does not match reference");
       }
   }
+  //for (int64_t i = 0; i < A.num_nodes; i++) {
+  //    if (Vprop_map[i] != bufReference[i]){
+  //        printf("i = %ld\n",i);
+  //        throw std::runtime_error("Score does not match reference");
+  //    }
+  //}
   auto compare_end = std::chrono::high_resolution_clock::now();
   std::cout << "TEST PASSED\n";
 

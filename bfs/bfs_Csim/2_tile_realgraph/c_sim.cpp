@@ -10,13 +10,12 @@
 #include <fstream>
 
 #define VDATA_SIZE 8
-#define TILE_SIZE 524288
-#define NUM_NODES 1632803
+#define TILE_SIZE 1048576
+#define NUM_NODES 4847571
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
 
 
 typedef struct v_datatype { int64_t data[VDATA_SIZE]; } v_dt;
-typedef struct r_f_datatype { int64_t data[2]; } row_dt;
 
 typedef struct {
     int64_t num_nodes;
@@ -32,11 +31,6 @@ typedef struct {
     int64_t rank;
 } NodeData;
 
-
-typedef struct {
-    int64_t src;
-    int64_t dst;
-} Edge;
 
 CSRMatrix A;
 
@@ -100,58 +94,62 @@ void bfs(int64_t frontier[], int64_t Vprop[], int64_t row_ptr[], int64_t col_idx
     }
 }
 
-extern "C"{
-void bfs(const v_dt *col,  // Read-Only Vector 1 from hbm -> col index
+void bfs_hls(const v_dt *col,  // Read-Only Vector 1 from hbm -> col index
         const v_dt *row,  // Read-Only Vector 2 from hbm -> row ptr preprocessed
         int64_t *frontier,      // Output Result to hbm -> bfs score before
-        int64_t *Vprop       // Output Result to hbm -> bfs score next
+        v_dt *Vprop       // Output Result to hbm -> bfs score next
         ) {
-
-#pragma HLS INTERFACE m_axi port = col      offset = slave bundle = gmem0 max_widen_bitwidth=512 depth = 4096
-#pragma HLS INTERFACE m_axi port = row      offset = slave bundle = gmem1 max_widen_bitwidth=512 depth = 4096
-#pragma HLS INTERFACE m_axi port = frontier offset = slave bundle = gmem3 max_widen_bitwidth=512 depth = 4096
-#pragma HLS INTERFACE m_axi port = Vprop    offset = slave bundle = gmem4 max_widen_bitwidth=512 depth = 4096
-
-#pragma HLS INTERFACE s_axilite port=col        bundle=control
-#pragma HLS INTERFACE s_axilite port=row        bundle=control
-#pragma HLS INTERFACE s_axilite port=frontier   bundle=control
-#pragma HLS INTERFACE s_axilite port=Vprop      bundle=control
-#pragma HLS INTERFACE s_axilite port=return     bundle=control
 
     int64_t value = -1;
     int64_t beforeIDX = 0;
     int64_t currIDX = 1;
     int64_t nextNumIDX = 1;
 
+int64_t row_ptr_buffer[2];
+int64_t col_idx_value;
+int64_t *Vprop_buffer = (int64_t *)calloc(TILE_SIZE, sizeof(int64_t));
+//int64_t Vprop_buffer[TILE_SIZE];
     for (beforeIDX = 0; beforeIDX < NUM_NODES; beforeIDX = currIDX) {
-        if((beforeIDX !=0) && (currIDX == nextNumIDX)){
+        if(beforeIDX !=0 && currIDX == nextNumIDX){
             break;
         }
         currIDX = nextNumIDX;
-        value = value + 1;
-        printf("value = %ld\n",value);
+        value++;
+
         for (int64_t tile = 0; tile < NUM_TILES; tile++) {
-            // Vprop을 프리패치하는 부분
+            for(int64_t k = 0; k < TILE_SIZE; k += VDATA_SIZE){
+                for(int64_t i = 0;i<VDATA_SIZE ;i++){
+                      Vprop_buffer[k+i] = Vprop[(tile*TILE_SIZE + k+i) / VDATA_SIZE].data[(tile*TILE_SIZE + k+i) % VDATA_SIZE];
+                }
+            }
+
             for (int64_t idx = beforeIDX; idx < currIDX; idx++) {
                 int64_t old_Vprop_idx = frontier[idx];
-                int64_t row_ptr_start = row[(tile*NUM_NODES+ old_Vprop_idx) / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx)%VDATA_SIZE];
-                int64_t row_ptr_end = row[(tile*NUM_NODES+ old_Vprop_idx + 1) / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx + 1)%VDATA_SIZE];
-                for (int64_t ptr = row_ptr_start; ptr < row_ptr_end; ptr++) {
-                    int64_t col_idx_value = col[ptr / VDATA_SIZE].data[ptr%VDATA_SIZE];
-                    if (Vprop[col_idx_value] == -1 || Vprop[col_idx_value] > value + 1) {
-                        if (col_idx_value < 50){
-                            printf("col_idx_value = %ld\n",col_idx_value);
-                        }
-                        Vprop[col_idx_value] = (int64_t)value + (int64_t)1;
-                        frontier[nextNumIDX] = col_idx_value;
-                        nextNumIDX++;
+                row_ptr_buffer[0] = row[(tile*NUM_NODES+ old_Vprop_idx)  / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx) % VDATA_SIZE];
+                row_ptr_buffer[1] = row[(tile*NUM_NODES+ old_Vprop_idx + 1)  / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx + 1) % VDATA_SIZE];
+                for (int64_t ptr = row_ptr_buffer[0]; ptr < row_ptr_buffer[1]; ptr ++ ) {
+                    col_idx_value = col[ptr  / VDATA_SIZE].data[ptr % VDATA_SIZE] - TILE_SIZE*tile;
+                    if (Vprop_buffer[col_idx_value] == -1 || Vprop_buffer[col_idx_value] > value + 1) {
+                       Vprop_buffer[col_idx_value] = value + 1;
+                       #pragma HLS dependence variable=Vprop_buffer false
+                       frontier[nextNumIDX] = col_idx_value + TILE_SIZE*tile;
+                       nextNumIDX++;
                     }
+                }
+            }
+            for(int64_t kk = 0; kk < TILE_SIZE; kk += VDATA_SIZE){
+                for(int64_t ii = 0;ii<VDATA_SIZE ;ii++){
+                    Vprop[(tile*TILE_SIZE + kk+ii)  / VDATA_SIZE].data[(tile*TILE_SIZE + kk+ii) % VDATA_SIZE] =Vprop_buffer[kk+ii];
                 }
             }
         }
     }
 }
-}
+
+typedef struct {
+    int64_t src;
+    int64_t dst;
+} Edge;
 
 int64_t edge_exists(Edge *edges, int64_t edge_count, int64_t src, int64_t dst) {
     for (int64_t i = 0; i < edge_count; i++) {
@@ -182,7 +180,7 @@ void generate_random_graph(CSRMatrix *A, int64_t num_nodes, int64_t num_edges, i
             edges[edge_count].dst = dst;
             out_degree[src]++;
             in_degree[dst]++;
-            A->values[edge_count] = 1; // Edge weights are set to 1.0
+            A->values[edge_count] = 1.0f; // Edge weights are set to 1.0
             edge_count++;
         }
     }
@@ -236,7 +234,7 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
 
     // Create num_tiles csr (row ptr & col index)
     CSRMatrix *tile_CSRMatrix = (CSRMatrix *)malloc(num_tiles * sizeof(CSRMatrix));
-    printf("1");
+
     for (int64_t t = 0; t < num_tiles; t++) {
         tile_CSRMatrix[t].num_nodes = num_nodes;
         tile_CSRMatrix[t].num_edges = 0; // This will be adjusted later
@@ -244,7 +242,7 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
         tile_CSRMatrix[t].col_idx = NULL; // This will be allocated later
         tile_CSRMatrix[t].values = NULL; // This will be allocated later
     }
-    printf("2");
+    
     // Count the edges for each tile
     for (int64_t i = 0; i < A->num_edges; i++) {
         int64_t index = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE] / tile_size;
@@ -261,7 +259,7 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
         tile_CSRMatrix[index].col_idx[col_idx_ptr[index] / VDATA_SIZE].data[col_idx_ptr[index] % VDATA_SIZE] = A->col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
         col_idx_ptr[index]++;
     }
-    printf("3");
+
     // Populate row_ptr for each tile
     for (int64_t t = 0; t < num_tiles; t++) {
         for (int64_t i = 0; i <= num_nodes; i++) {
@@ -280,7 +278,7 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
             tile_CSRMatrix[tile_index].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE]++;
         }
     }
-    printf("4");
+
     for (int64_t t = 0; t < num_tiles; t++) {
         int64_t cumulative_sum = 0;
         for (int64_t i = 0; i <= num_nodes; i++) {
@@ -301,7 +299,6 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
         }
         //printf("\n");
     }
-    printf("5");
     for (int64_t t = 0; t < num_tiles; t++) {
         for (int64_t i = 1; i <= num_nodes; i++) {
              T->row_ptr[(t*num_nodes + i) / VDATA_SIZE].data[(t*num_nodes + i) % VDATA_SIZE] =  tile_CSRMatrix[t].row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
@@ -309,7 +306,7 @@ void tile_CSRMatrix_func(const CSRMatrix *A, CSRMatrix *T, int64_t tile_size) {
     }
 
     int64_t j=0;
-    printf("6");
+
     for (int64_t t = 0; t < num_tiles; t++) {
         if(t>0){
           j += (tile_CSRMatrix[t-1].num_edges);
@@ -377,41 +374,41 @@ void bfs_CSR(const CSRMatrix *A, int64_t start_node, int64_t *distances) {
     free(visited);
 }
 
-//hls::stream<int,100> queue;
 
 int main() {
+
     printf("START LOAD GRAPH\n");
-    load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
+    load_csr_matrix(&A, "/home/kdg6245/graph/csr_matrix_int64_debug.bin");
     printf("FINISH LOAD GRAPH\n");
     int64_t *r = (int64_t *)malloc(A.num_nodes * sizeof(int64_t));
-    
-    int64_t start_vertex = 0;
     printf("A.num_nodes = %ld\n",A.num_nodes);
-    printf("A.num_edges = %ld\n",A.num_edges);
-    //int64_t NUM_EDGES = A.num_edges;
     // BFS 계산
+    int64_t start_vertex = 0;
     printf("START CPU BFS\n");
     bfs_CSR(&A, start_vertex ,r);
     printf("FINISH CPU BFS\n");
-    int64_t *frontier = (int64_t *)malloc(A.num_nodes * sizeof(int64_t));
-    int64_t *Vprop = (int64_t *)malloc(A.num_nodes * sizeof(int64_t));
+    
+    int64_t *frontier = (int64_t *)malloc(NUM_NODES * sizeof(int64_t));
+
+    v_dt *Vprop = (v_dt *)malloc((size_t)((NUM_NODES+VDATA_SIZE-1)/VDATA_SIZE) * sizeof(v_dt));
+    
+    
     for (int64_t i = 0; i < NUM_NODES; i++) {
         frontier[i] = -1;
-        Vprop[i] = -1;
+        Vprop[i / VDATA_SIZE].data[i% VDATA_SIZE] = -1;
     }
+
     frontier[0] = start_vertex;
-    Vprop[start_vertex] = 0;
+    Vprop[start_vertex / VDATA_SIZE].data[start_vertex % VDATA_SIZE]= 0;
 
     CSRMatrix T;
     printf("START PREPROCESS GRAPH\n");
     tile_CSRMatrix_func(&A, &T, TILE_SIZE);
     printf("FINISH PREPROCESS GRAPH\n");
     printf("Start FPGA\n");
-    bfs(T.col_idx, T.row_ptr, frontier, Vprop);
+
+    bfs_hls(T.col_idx, T.row_ptr, frontier, Vprop);
     printf("Finish FPGA\n");
-    //for (int64_t i = 0; i < 100; i++) {
-    //  printf("frontier[%ld] = %ld\n",i, frontier[i]);
-    //}
     NodeData *nodes = (NodeData *)malloc(A.num_nodes * sizeof(NodeData));
     for (int64_t i = 0; i < A.num_nodes; i++) {
         nodes[i].node = i;
@@ -419,27 +416,29 @@ int main() {
         nodes[i].rank = r[i];
     }
     // BFS 결과 확인
+    for (int64_t i = 900; i < 1000; i++) {
+        printf("i = %ld cpu = %ld, fpga = %ld\n",i, nodes[i].rank,Vprop[i / VDATA_SIZE].data[i% VDATA_SIZE]);
+    }
+
+
     for (int64_t i = 0; i < A.num_nodes; i++) {
-        //float rank_as_int64_t = std::stof(nodes[i].rank.to_string());
-        //printf("Node %ld: in-degree %ld, rank %f\n", nodes[i].node, nodes[i].in_degree, rank_as_int);
-        
-        if(nodes[i].rank != Vprop[i]){
+        //std::cout << "cpu: " << nodes[i].rank << std::endl;
+        //std::cout << "hls: " << Vprop[i / VDATA_SIZE].data[i% VDATA_SIZE] << std::endl;
+        if(nodes[i].rank != Vprop[i / VDATA_SIZE].data[i% VDATA_SIZE]){
+            printf("i = %ld\n",i);
             printf("TEST FAIL\n");
-            break;
+            free(frontier);
+            free(Vprop);
+            free(A.row_ptr);
+            free(A.col_idx);
+            free(A.values);
+            free(r);
+            //free(in_degree);
+            free(nodes);
+            return 0;
         }
     }
-    //for(int64_t i = 1000; i < 1100; i++){
-    //    std::cout << "cpu: " << nodes[i].rank << std::endl;
-    //    std::cout << "hls: " << Vprop[i] << std::endl;
-    //}
-    //  for (int64_t i = 0; i < 500; i++) {
-    //  printf("frontier[%ld] = %ld\n",i, frontier[i]);
-    //  printf("Vprop_map[%ld] = %ld\n",frontier[i], Vprop[frontier[i]] );
-    //
-    //}
     printf("TEST PASS\n");
-    //float sum_as_int64_t = std::stof(sum.to_string());
-    //printf("sum %f\n", sum_as_int);
 
 
     // 메모리 해제
