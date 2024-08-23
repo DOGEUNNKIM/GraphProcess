@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdint.h>
 #include "ap_fixed.h"
 #include "hls_stream.h"
 
@@ -52,8 +53,8 @@ void bfs(const v_dt *col,  // Read-Only Vector 1 from hbm -> col index
                 for (int64_t ptr = row_ptr_start; ptr < row_ptr_end; ptr++) {
                     int64_t col_idx_value = col[ptr / VDATA_SIZE].data[ptr%VDATA_SIZE];
 
-                    if (Vprop[col_idx_value] == -1 || Vprop[col_idx_value] > value + 1) {
-                        Vprop[col_idx_value] = (int64_t)(value + 1);
+                    if ((Vprop[col_idx_value] == (int64_t)-1) || (Vprop[col_idx_value] > value + (int64_t)1)) {
+                        Vprop[col_idx_value] = (int64_t)(value + (int64_t)1);
                         frontier[nextNumIDX] = col_idx_value;
                         nextNumIDX++;
                     }

@@ -14,11 +14,9 @@
 #include "experimental/xrt_kernel.h"
 
 #define VDATA_SIZE 8
-#define TILE_SIZE 524288
-#define NUM_NODES 4847571
-#define NUM_EDGES 68993773
-#define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
-#define START_VERTEX 10
+#define NUM_NODES 4039
+#define NUM_EDGES 88234
+#define START_VERTEX 0
 
 using namespace std;
 
@@ -62,6 +60,62 @@ void load_csr_matrix(CSRMatrix *A, const char* filename) {
     infile.read(reinterpret_cast<char*>(A->values), A->num_edges * sizeof(int64_t  ));
 
     infile.close();
+}
+
+int64_t edge_exists(Edge *edges, int64_t edge_count, int64_t src, int64_t dst) {
+    for (int64_t i = 0; i < edge_count; i++) {
+        if (edges[i].src == src && edges[i].dst == dst) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void generate_random_graph(CSRMatrix *A, int64_t num_nodes, int64_t num_edges, int64_t *in_degree) {
+    printf("make graph\n");
+    A->num_nodes = num_nodes;
+    A->num_edges = num_edges;
+    A->row_ptr = (v_dt *)malloc(((num_nodes + 1) + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
+    A->col_idx = (v_dt *)malloc((num_edges + VDATA_SIZE - 1) / VDATA_SIZE * sizeof(v_dt));
+    A->values = (int64_t *)malloc(num_edges * sizeof(int64_t));
+
+    int64_t *out_degree = (int64_t *)calloc(num_nodes, sizeof(int64_t));
+    Edge *edges = (Edge *)malloc(num_edges * sizeof(Edge));
+    int64_t edge_count = 0;
+
+    srand(time(NULL));
+    while (edge_count < num_edges) {
+        int64_t src = rand() % num_nodes;
+        int64_t dst = rand() % num_nodes;
+        if (!edge_exists(edges, edge_count, src, dst)) {
+            edges[edge_count].src = src;
+            edges[edge_count].dst = dst;
+            out_degree[src]++;
+            in_degree[dst]++;
+            A->values[edge_count] = 1.0f; // Edge weights are set to 1.0
+            edge_count++;
+        }
+    }
+    // Initialize row_ptr
+    A->row_ptr[0].data[0] = 0;
+    for (int64_t i = 1; i <= num_nodes; i++) {
+        A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE] = A->row_ptr[(i - 1) / VDATA_SIZE].data[(i - 1) % VDATA_SIZE] + out_degree[i - 1];
+    }
+    // Temporary array to keep track of positions in col_idx
+    int64_t *current_pos = (int64_t *)malloc(num_nodes * sizeof(int64_t));
+    for (int64_t i = 0; i < num_nodes; i++) {
+        current_pos[i] = A->row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
+    }
+    // Fill col_idx based on row_ptr
+    for (int64_t i = 0; i < num_edges; i++) {
+        int64_t src = edges[i].src;
+        int64_t dst = edges[i].dst;
+        int64_t pos = current_pos[src]++;
+        A->col_idx[pos / VDATA_SIZE].data[pos % VDATA_SIZE] = dst;
+    }
+    free(out_degree);
+    free(edges);
+    free(current_pos);
 }
 
 
@@ -219,7 +273,7 @@ void bfs_CSR(const CSRMatrix *A, int64_t start_node, int64_t *distances) {
 void bfs_hls(const v_dt *col,  // Read-Only Vector 1 from hbm -> col index
         const v_dt *row,  // Read-Only Vector 2 from hbm -> row ptr preprocessed
         int64_t *frontier,      // Output Result to hbm -> bfs score before
-        int64_t *Vprop       // Output Result to hbm -> bfs score next
+        int *Vprop       // Output Result to hbm -> bfs score next
         ) {
 
     int64_t value = -1;
@@ -232,21 +286,17 @@ void bfs_hls(const v_dt *col,  // Read-Only Vector 1 from hbm -> col index
             break;
         }
         currIDX = nextNumIDX;
-        value++;
-        for (int64_t tile = 0; tile < NUM_TILES; tile++) {
-            // Vprop을 프리패치하는 부분
-            for (int64_t idx = beforeIDX; idx < currIDX; idx++) {
-                int64_t old_Vprop_idx = frontier[idx];
-                int64_t row_ptr_start = row[(tile*NUM_NODES+ old_Vprop_idx) / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx)%VDATA_SIZE];
-                int64_t row_ptr_end = row[(tile*NUM_NODES+ old_Vprop_idx + 1) / VDATA_SIZE].data[(tile*NUM_NODES+ old_Vprop_idx + 1)%VDATA_SIZE];
-                for (int64_t ptr = row_ptr_start; ptr < row_ptr_end; ptr++) {
-                    int64_t col_idx_value = col[ptr / VDATA_SIZE].data[ptr%VDATA_SIZE];
-
-                    if (Vprop[col_idx_value] == -1 || Vprop[col_idx_value] > value + 1) {
-                        Vprop[col_idx_value] = value + 1;
-                        frontier[nextNumIDX] = col_idx_value;
-                        nextNumIDX++;
-                    }
+        value = value + 1;
+        for (int64_t idx = beforeIDX; idx < currIDX; idx++) {
+            int64_t old_Vprop_idx = frontier[idx];
+            int64_t row_ptr_start = row[(old_Vprop_idx) / VDATA_SIZE].data[(old_Vprop_idx)%VDATA_SIZE];
+            int64_t row_ptr_end = row[(old_Vprop_idx + 1) / VDATA_SIZE].data[(old_Vprop_idx + 1)%VDATA_SIZE];
+            for (int64_t ptr = row_ptr_start; ptr < row_ptr_end; ptr++) {
+                int64_t col_idx_value = col[ptr / VDATA_SIZE].data[ptr%VDATA_SIZE];
+                if (Vprop[col_idx_value] == -1 || Vprop[col_idx_value] > value + 1) {
+                    Vprop[col_idx_value] = (value + 1);
+                    frontier[nextNumIDX] = col_idx_value;
+                    nextNumIDX++;
                 }
             }
         }
@@ -260,9 +310,11 @@ int main(int  argc, char **argv) {
   CSRMatrix A;
 
   printf("START LOAD GRAPH\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
+  //load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_facebook_int64.bin");
+  int64_t *indeg = (int64_t  *)malloc(NUM_NODES * sizeof(int64_t ));
+  generate_random_graph(&A, NUM_NODES, NUM_EDGES,indeg );
+  printf("FINISH LOAD GRAPH\n");    
 
-  printf("FINISH LOAD GRAPH\n");
 
   int64_t *r = (int64_t  *)malloc(A.num_nodes * sizeof(int64_t ));
 
@@ -277,9 +329,10 @@ int main(int  argc, char **argv) {
 
   //PREPROCESS 
   CSRMatrix T;
-  printf("START PREPROCESS GRAPH\n");
+  T = A;
+  //printf("START PREPROCESS GRAPH\n");
   //tile_CSRMatrix_func(&A, &T, TILE_SIZE);
-  printf("FINISH PREPROCESS GRAPH\n");
+  //printf("FINISH PREPROCESS GRAPH\n");
 
   NodeData *nodes = (NodeData *)malloc((int64_t)A.num_nodes * sizeof(NodeData));
   for (int64_t  i = 0; i < A.num_nodes; i++) {
@@ -290,7 +343,7 @@ int main(int  argc, char **argv) {
 ////
 //
     int64_t *frontier1 = (int64_t *)malloc(A.num_nodes * sizeof(int64_t));
-    int64_t *Vprop1 = (int64_t  *)malloc(A.num_nodes * sizeof(int64_t ));
+    int *Vprop1 = (int*)malloc(A.num_nodes * sizeof(int));
     for (int64_t  i = 0; i < NUM_NODES; i++) {
         frontier1[i] = -1;
         Vprop1[i] = -1;
@@ -299,9 +352,12 @@ int main(int  argc, char **argv) {
     Vprop1[START_VERTEX] = 0;
 
   auto cpu_begin = std::chrono::high_resolution_clock::now();
-    bfs_hls(T.col_idx, T.row_ptr, frontier1, Vprop1);
+  bfs_hls(T.col_idx, T.row_ptr, frontier1, Vprop1);
 
   auto cpu_end = std::chrono::high_resolution_clock::now();
+
+
+
 
 //
 ////
@@ -316,9 +372,10 @@ int main(int  argc, char **argv) {
   std::cout << "Load the xclbin " << xclbin_file_name << std::endl;
   auto uuid = device.load_xclbin(xclbin_file_name);
   
-  int64_t row_ptr_process_bytes = sizeof(int64_t ) * (A.num_nodes*NUM_TILES  + 1);
+  int64_t row_ptr_process_bytes = sizeof(int64_t ) * (A.num_nodes  + 1);
   int64_t col_idx_process_bytes = sizeof(int64_t ) * (A.num_edges+1);
   int64_t node_bytes = sizeof(int64_t) * A.num_nodes;
+  int vprop_bytes = sizeof(int) * A.num_nodes;
 
   auto krnl = xrt::kernel(device, uuid, "bfs");
 
@@ -329,7 +386,7 @@ int main(int  argc, char **argv) {
   printf("row done\n");
   auto frontier = xrt::bo(device, node_bytes, krnl.group_id(2));
   printf("frontier done\n");
-  auto Vprop2 = xrt::bo(device, node_bytes, krnl.group_id(3));
+  auto Vprop2 = xrt::bo(device, vprop_bytes, krnl.group_id(3));
   printf("Vprop2 done\n");
 
   std::cout << "Map Buffer in Global Memory\n";
@@ -337,13 +394,13 @@ int main(int  argc, char **argv) {
   auto col_map = col.map<int64_t*>();
   auto row_map = row.map<int64_t*>();
   auto frontier_map = frontier.map<int64_t*>();
-  auto Vprop_map = Vprop2.map<int64_t*>();
+  auto Vprop_map = Vprop2.map<int*>();
 
   std::cout << "Fill Buffer in Global Memory\n";
   std::fill(col_map, col_map + A.num_edges, 0);
-  std::fill(row_map, row_map + A.num_nodes*NUM_TILES + 1, 0);
+  std::fill(row_map, row_map + A.num_nodes + 1, 0);
   std::fill(frontier_map, frontier_map + A.num_nodes,  (int64_t)-1);
-  std::fill(Vprop_map, Vprop_map + A.num_nodes, (int64_t)-1);
+  std::fill(Vprop_map, Vprop_map + A.num_nodes, -1);
   
   // Create the test data
   vector<int64_t> bufReference(A.num_nodes);
@@ -351,18 +408,18 @@ int main(int  argc, char **argv) {
   for (int64_t  i = 0; i < A.num_edges; ++i) {
     col_map[i] = T.col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
-  for (int64_t i = 0; i < (int64_t)(A.num_nodes*NUM_TILES + 1); ++i) {
+  for (int64_t i = 0; i < (int64_t)(A.num_nodes + 1); ++i) {
     row_map[i] = T.row_ptr[i / VDATA_SIZE ].data[i % VDATA_SIZE];
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
     frontier_map[i] = -1;
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
-    Vprop_map[i] = (int64_t)-1;
+    Vprop_map[i] = -1;
   }
   
   frontier_map[0] = START_VERTEX;
-  Vprop_map[START_VERTEX] = (int64_t)0;
+  Vprop_map[START_VERTEX] = 0;
 
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
     bufReference[i] = nodes[i].rank;
@@ -435,10 +492,9 @@ int main(int  argc, char **argv) {
   free(A.col_idx);
   free(A.values);
   free(r);
+  free(indeg);
   free(nodes);
-
-
-  //Check FPGA result
+  
   auto compare_begin = std::chrono::high_resolution_clock::now();
 
   printf("CHECK FRONTIER\n");
@@ -449,10 +505,14 @@ int main(int  argc, char **argv) {
       }
   }
   printf("CHECK VPROP\n");
+  for (int64_t i = 0; i < 300; i++) {
+    printf("Vprop_map[%ld] = %d\n", frontier_map[i],Vprop_map[frontier_map[i]]);
+  }
+
   for (int64_t i = 0; i < A.num_nodes; i++) {
       if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
           printf("i = %ld\n",i);
-          printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier_map[i]]);
+          printf("FPGA = %d, CPU = %d\n",Vprop_map[frontier_map[i]],Vprop1[frontier_map[i]]);
           throw std::runtime_error("Score does not match reference");
       }
   }

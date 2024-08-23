@@ -7,6 +7,7 @@
 #include <time.h>
 #include <queue>
 #include <fstream>
+#include <stdint.h>
 
 // XRT includes
 #include "experimental/xrt_bo.h"
@@ -14,9 +15,9 @@
 #include "experimental/xrt_kernel.h"
 
 #define VDATA_SIZE 8
-#define TILE_SIZE 524288
-#define NUM_NODES 1632803
-#define NUM_EDGES 30622564
+#define TILE_SIZE 4847571
+#define NUM_NODES 4847571
+#define NUM_EDGES 68993773
 #define NUM_TILES (NUM_NODES + TILE_SIZE - 1) / TILE_SIZE
 #define START_VERTEX 0
 
@@ -260,7 +261,7 @@ int main(int  argc, char **argv) {
   CSRMatrix A;
 
   printf("START LOAD GRAPH\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
+  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_LiveJournal1.bin");
   printf("FINISH LOAD GRAPH\n");
 
   int64_t *r = (int64_t  *)malloc(A.num_nodes * sizeof(int64_t ));
@@ -350,7 +351,7 @@ int main(int  argc, char **argv) {
   for (int64_t  i = 0; i < A.num_edges; ++i) {
     col_map[i] = T.col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
-  for (int64_t i = 0; i < (int64_t)(A.num_nodes*NUM_TILES + 1); ++i) {
+  for (int64_t i = 0; i < (int64_t)((int64_t)A.num_nodes*NUM_TILES + 1); ++i) {
     row_map[i] = T.row_ptr[i / VDATA_SIZE ].data[i % VDATA_SIZE];
   }
   for (int64_t  i = 0; i < A.num_nodes; ++i) {
@@ -444,11 +445,14 @@ int main(int  argc, char **argv) {
   //for (int64_t i = 0; i < 100; i++) {
   //    printf("frontier_map[%ld] = %ld\n",i, frontier_map[i]);
   //}
-  for (int64_t i = 0; i < A.num_nodes; i++) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes; i++) {
       if (frontier_map[i] != frontier1[i]){
           cout << i << endl;
         throw std::runtime_error("frontier_map does not match reference");
       }
+  }
+  for (int64_t i = 0; i < 100; i++) {
+      printf("frontier_map = %ld, \n",frontier_map[i]);
   }
   printf("CHECK VPROP\n");
   //for (int64_t i = 1000; i < 2000; i++) {
@@ -462,10 +466,10 @@ int main(int  argc, char **argv) {
   //    printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop_map[frontier_map[i]]);
   //}
   for (int64_t i = 0; i < 100; i++) {
-      printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop1[frontier_map[i]]);
+      printf("Vprop_map[%ld] = %ld\n",frontier_map[i], Vprop_map[frontier_map[i]]);
   }
   for (int64_t i = 0; i < A.num_nodes; i++) {
-      if (Vprop_map[frontier_map[i]] != Vprop1[frontier1[i]]){
+      if (Vprop_map[(int64_t)frontier_map[i]] != Vprop1[(int64_t)frontier_map[i]]){
           printf("i = %ld\n",i);
           printf("FPGA = %ld, CPU = %ld\n",Vprop_map[frontier_map[i]],Vprop1[frontier_map[i]]);
           throw std::runtime_error("Score does not match reference");

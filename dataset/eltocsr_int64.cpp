@@ -26,8 +26,8 @@ void generate_graph_from_file(CSRMatrix *A, const char *filename) {
 
     int64_t src, dst;
 
-    A->num_nodes = 1632803;
-    A->num_edges = 30622564;
+    A->num_nodes = 4039;
+    A->num_edges = 88234;
 
     int64_t row_ptr_size = (A->num_nodes + VDATA_SIZE) / VDATA_SIZE;  // Adjust the size for row_ptr
     A->row_ptr = (v_dt *)malloc(row_ptr_size * sizeof(v_dt));
@@ -93,8 +93,8 @@ void save_csr_to_file(CSRMatrix *A, const char *filename) {
 
 int main() {
     CSRMatrix A;
-    generate_graph_from_file(&A, "/home/kdg6245/graph/dataset/soc-pokec-relationships.txt");
-    save_csr_to_file(&A, "csr_matrix_pokec.bin");
+    generate_graph_from_file(&A, "/home/kdg6245/graph/dataset/facebook_combined.txt");
+    save_csr_to_file(&A, "csr_matrix_facebook_int64.bin");
 
     for (int64_t i = 0; i < 50; i++) {
         printf("Node %ld col_idx %ld\n", i, A.col_idx[0].data[i]);
