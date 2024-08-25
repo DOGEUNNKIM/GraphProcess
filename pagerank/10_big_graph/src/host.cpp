@@ -54,9 +54,15 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define EPSILON 1e-6f
 #define TILE_SIZE 524288  // 4MB
 #define UNROLL_SIZE 8
-
-#define NUM_NODES_ 1632803
-#define NUM_EDGES 30622564
+//facebook
+//#define NUM_NODES_ 4039
+//#define NUM_EDGES 88234
+//pocker
+//#define NUM_NODES_ 1632803
+//#define NUM_EDGES 30622564
+//LiveJournal1
+#define NUM_NODES_ 4847571
+#define NUM_EDGES 68993773
 
 #define NUM_TILES (NUM_NODES_ + TILE_SIZE - 1) / TILE_SIZE
 
@@ -449,7 +455,9 @@ int main(int argc, char **argv) {
   std::string xclbin_file_name = argv[1];
   CSRMatrix A;
   printf("START LOAD\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
+  //load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_facebook_int64.bin");
+  //load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
+  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_LiveJournal1.bin");
   printf("FINISH LOAD\n");
   float *cpu_result = (float *)malloc(A.num_nodes * sizeof(float));
 
@@ -462,9 +470,9 @@ int main(int argc, char **argv) {
 
   NodeData *nodes = (NodeData *)malloc(A.num_nodes * sizeof(NodeData));
   float sum = 0.0; 
-  for (int64_t i = 0; i < 10; i++) {
-    cout << cpu_result[i] << endl;
-  }
+  //for (int64_t i = 0; i < 10; i++) {
+  //  cout << cpu_result[i] << endl;
+  //}
   for (int64_t i = 0; i < A.num_nodes; i++) {
       nodes[i].node = i;
       nodes[i].rank = cpu_result[i];
@@ -487,7 +495,9 @@ int main(int argc, char **argv) {
   }
   
   printf("START FPGA SIM\n");
+  auto fpga_sim_begin = std::chrono::high_resolution_clock::now();
   pagerank(T.col_idx,T.row_ptr, A.row_ptr,FPGA_result_1,FPGA_result_2, NUM_NODES_);
+  auto fpga_sim_end = std::chrono::high_resolution_clock::now();
   printf("FINISH FPGA SIM\n");
 
   //The host code assumes there is a single device and opening a device by
@@ -495,7 +505,7 @@ int main(int argc, char **argv) {
   //to be adjusted. The user can get the list of the devices and device indices
   //by xbtuil examine command.
   unsigned int device_index = 0;
-  std::cout << "Open the device" << device_index << std::endl;
+  std::cout << "Open the device " << device_index << std::endl;
   auto device = xrt::device(device_index);
   
   std::cout << "Load the xclbin " << xclbin_file_name << std::endl;
@@ -524,28 +534,28 @@ int main(int argc, char **argv) {
   std::fill(bo1_map, bo1_map + (int64_t)A.num_nodes*(int64_t)NUM_TILES + 1, 0);
   std::fill(bo2_map, bo2_map + (int64_t)A.num_nodes + 1, 0.0f);
 
-  std::fill(bo_score_map_1, bo_score_map_1 + A.num_nodes, 1.0/A.num_nodes);
-  std::fill(bo_score_map_2, bo_score_map_2 + A.num_nodes, 0.0);
+  std::fill(bo_score_map_1, bo_score_map_1 + (int64_t)A.num_nodes, 1.0/A.num_nodes);
+  std::fill(bo_score_map_2, bo_score_map_2 + (int64_t)A.num_nodes, 0.0);
 
   // Create the test data
   vector<float> bufReference(A.num_nodes);
 
-  for (int i = 0; i < A.num_edges; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_edges; ++i) {
     bo0_map[i] = T.col_idx[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
-  for (int i = 0; i < A.num_nodes*NUM_TILES + 1; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes*NUM_TILES + 1; ++i) {
     bo1_map[i] = T.row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
-  for (int i = 0; i < A.num_nodes; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes; ++i) {
     bo2_map[i] = A.row_ptr[i / VDATA_SIZE].data[i % VDATA_SIZE];
   }
-  for (int i = 0; i < A.num_nodes; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes; ++i) {
     bo_score_map_1[i] = 1/A.num_nodes;
   }
-  for (int i = 0; i < A.num_nodes; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes; ++i) {
     bo_score_map_2[i] = 0;
   }
-  for (int i = 0; i < A.num_nodes; ++i) {
+  for (int64_t i = 0; i < (int64_t)A.num_nodes; ++i) {
     bufReference[i] = nodes[i].rank;
   }
 
@@ -604,11 +614,15 @@ int main(int argc, char **argv) {
   
   std::chrono::duration<double> fpga_duration = fpga_end - fpga_begin;
   std::cout << "FPGA Time:                    " << fpga_duration.count() << " s" << std::endl;
+  
+  std::chrono::duration<double> fpga_duration_sim = fpga_sim_end - fpga_sim_begin;
+  std::cout << "FPGA simulation Time:                    " << fpga_duration_sim.count() << " s" << std::endl;
 
   std::chrono::duration<double> cpu_duration = cpu_end - cpu_begin;
   std::cout << "CPU Time:                     " << cpu_duration.count() << " s" << std::endl;
 
-  std::cout << "FPGA Speedup:                 " << cpu_duration.count() / fpga_duration.count() << " x" << std::endl;
+  std::cout << "FPGA / CPU Speedup:                 " << cpu_duration.count() / fpga_duration.count() << " x" << std::endl;
+  std::cout << "FPGA / SIM Speedup:                 " << cpu_duration.count() / fpga_duration.count() << " x" << std::endl;
   
   //// 메모리 해제
   //Check result
@@ -627,32 +641,32 @@ int main(int argc, char **argv) {
   free(FPGA_result_1);
   free(FPGA_result_2);
 
-  //sum = 0.0;
-  //for (int64_t i = 0; i < A.num_nodes; i++) {
-  //    sum += bo_score_map_1[i];
-  //}
-  //printf("sum %f\n", sum);
-//
-//
-  //// Validate our results
-  //
-  //auto compare_begin = std::chrono::high_resolution_clock::now();
-//
-  //float diff = 0;
-  //for (int64_t i = 0; i < A.num_nodes; i++) {
-  //    diff += abs(bo_score_map_1[i] - bufReference[i]) ;
-  //}
-  //printf("diff %f\n", diff);
-  //
-  //if (diff > EPSILON*100)
-  //  throw std::runtime_error("Score does not match reference");
-  //
-  //std::cout << "TEST PASSED\n";
-  //
-  //auto compare_end = std::chrono::high_resolution_clock::now();
-//
-  //std::chrono::duration<double> compare_duration = compare_end - compare_begin;
-  //std::cout << "Compare Time:                 " << compare_duration.count() << " s" << std::endl;
+  sum = 0.0;
+  for (int64_t i = 0; i < A.num_nodes; i++) {
+      sum += bo_score_map_1[i];
+  }
+  printf("sum %f\n", sum);
+
+
+  // Validate our results
+  
+  auto compare_begin = std::chrono::high_resolution_clock::now();
+
+  float diff = 0;
+  for (int64_t i = 0; i < A.num_nodes; i++) {
+      diff += abs(bo_score_map_1[i] - bufReference[i]) ;
+  }
+  printf("diff %f\n", diff);
+  
+  if (diff > EPSILON*100)
+    throw std::runtime_error("Score does not match reference");
+  
+  std::cout << "TEST PASSED\n";
+  
+  auto compare_end = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<double> compare_duration = compare_end - compare_begin;
+  std::cout << "Compare Time:                 " << compare_duration.count() << " s" << std::endl;
 
   return 0;
 }

@@ -25,6 +25,15 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
 #pragma HLS INTERFACE m_axi port = out1 offset = slave bundle = gmem3
 #pragma HLS INTERFACE m_axi port = out2 offset = slave bundle = gmem4 
 
+#pragma HLS INTERFACE s_axilite port=in1        bundle=control
+#pragma HLS INTERFACE s_axilite port=in2        bundle=control
+#pragma HLS INTERFACE s_axilite port=in3        bundle=control
+#pragma HLS INTERFACE s_axilite port=out1       bundle=control
+#pragma HLS INTERFACE s_axilite port=out2       bundle=control
+#pragma HLS INTERFACE s_axilite port=return     bundle=control
+#pragma HLS INTERFACE s_axilite port=NUM_NODES  bundle=control
+
+
   // set constant
   float base_score = (1.0 - ALPHA) / NUM_NODES;
   
