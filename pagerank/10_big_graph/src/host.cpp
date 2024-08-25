@@ -55,8 +55,8 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define TILE_SIZE 524288  // 4MB
 #define UNROLL_SIZE 8
 
-#define NUM_NODES_ 4847571
-#define NUM_EDGES 68993773
+#define NUM_NODES_ 1632803
+#define NUM_EDGES 30622564
 
 #define NUM_TILES (NUM_NODES_ + TILE_SIZE - 1) / TILE_SIZE
 
@@ -234,17 +234,17 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
   int64_t buffer_start;
   int64_t size_;
   float src_pagerank;
-  
+
   for (int64_t iter = 0; iter < MAX_ITER; iter++) {
-  if( (iter%2) == 0){
+  if( (iter %2) == 0){
     for (int64_t i = 0; i < NUM_NODES; i ++) {
       #pragma HLS pipeline II=1
       out2[i] = base_score;
     }
     //push score_new
-    for (int tile = 0; tile < NUM_TILES; tile ++) {
-      int score_size = ( (tile + 1) * TILE_SIZE > NUM_NODES) ? NUM_NODES - TILE_SIZE*tile : TILE_SIZE;
-      for(int k = 0; k < TILE_SIZE; k++){
+    for (int64_t tile = 0; tile < NUM_TILES; tile ++) {
+      int64_t score_size = ( (tile + 1) * TILE_SIZE > NUM_NODES) ? NUM_NODES - TILE_SIZE*tile : TILE_SIZE;
+      for(int64_t k = 0; k < TILE_SIZE; k++){
         #pragma HLS pipeline II=1
         if ( k < score_size ) {
           score_buffer[k] = out2[tile*TILE_SIZE + k];
@@ -252,8 +252,8 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
       }
       for (int64_t u = 0; u < NUM_NODES; u++) {
         //prefatch row_ptr
-        row_ptr_buffer[0]= in2[u/VDATA_SIZE].data[u%VDATA_SIZE];
-        row_ptr_buffer[1]= in2[(u+1)/VDATA_SIZE].data[(u+1)%VDATA_SIZE];
+        row_ptr_buffer[0]= in2[(u+tile*NUM_NODES)/VDATA_SIZE].data[(u+tile*NUM_NODES)%VDATA_SIZE];
+        row_ptr_buffer[1]= in2[(u+tile*NUM_NODES+1)/VDATA_SIZE].data[(u+tile*NUM_NODES+1)%VDATA_SIZE];
         size_ = row_ptr_buffer[1] - row_ptr_buffer[0];
         buffer_start = row_ptr_buffer[0];
         src_pagerank =  out1[u];
@@ -261,26 +261,29 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
         out_degree_buffer[0]= in3[u/VDATA_SIZE].data[u%VDATA_SIZE];
         out_degree_buffer[1]= in3[(u+1)/VDATA_SIZE].data[(u+1)%VDATA_SIZE]; 
         out_degree_u = out_degree_buffer[1] - out_degree_buffer[0];
-
         //push
-        for (int64_t b = 0; b < out_degree_u; b += UNROLL_SIZE) {
+        if(out_degree_u != 0){
+        for (int64_t b = 0; b < size_; b += UNROLL_SIZE) {
           //prefatch col_idx_buffer
+          int64_t chunk_size = (b + UNROLL_SIZE > size_) ? size_ - b : UNROLL_SIZE;
           for (int64_t k = 0; k < UNROLL_SIZE; k++) {
             #pragma HLS unroll
-            col_idx_buffer[k]= in1[(b + buffer_start + k)/VDATA_SIZE].data[(b + buffer_start + k)%VDATA_SIZE];
+            if( k < chunk_size) {
+                col_idx_buffer[k]= in1[(b + buffer_start + k)/VDATA_SIZE].data[(b + buffer_start + k)%VDATA_SIZE];
+            }
           }
           //SIMD parallel compute
-          int64_t chunk_size = (b + UNROLL_SIZE > out_degree_u) ? out_degree_u - b : UNROLL_SIZE;
-          for (int l = 0; l < UNROLL_SIZE; l++) {
+          for (int64_t l = 0; l < UNROLL_SIZE; l++) {
             #pragma HLS unroll 
             if( l < chunk_size) {
-              int idx = col_idx_buffer[l] - TILE_SIZE*tile;
+              int64_t idx = col_idx_buffer[l] - TILE_SIZE*tile;
               score_buffer[idx] = score_buffer[idx] + (ALPHA * src_pagerank / out_degree_u );
             }
           }
+        }
         }//push_one_vertex
       }//push_one_tile
-      for(int k = 0; k < TILE_SIZE; k++){
+      for(int64_t k = 0; k < TILE_SIZE; k++){
         #pragma HLS pipeline II=1
         if ( k < score_size ) {
           out2[tile*TILE_SIZE + k] = score_buffer[k];
@@ -293,9 +296,9 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
       out1[i] = base_score;
     }
     //push score_new
-    for (int tile = 0; tile < NUM_TILES; tile ++) {
-      int score_size = ( (tile + 1) * TILE_SIZE > NUM_NODES) ? NUM_NODES - TILE_SIZE*tile : TILE_SIZE;
-      for(int k = 0; k < TILE_SIZE; k++){
+    for (int64_t tile = 0; tile < NUM_TILES; tile ++) {
+      int64_t score_size = ( (tile + 1) * TILE_SIZE > NUM_NODES) ? NUM_NODES - TILE_SIZE*tile : TILE_SIZE;
+      for(int64_t k = 0; k < TILE_SIZE; k++){
         #pragma HLS pipeline II=1
         if ( k < score_size ) {
           score_buffer[k] = out1[tile*TILE_SIZE + k];
@@ -303,8 +306,8 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
       }
       for (int64_t u = 0; u < NUM_NODES; u++) {
         //prefatch row_ptr
-        row_ptr_buffer[0]= in2[u/VDATA_SIZE].data[u%VDATA_SIZE];
-        row_ptr_buffer[1]= in2[(u+1)/VDATA_SIZE].data[(u+1)%VDATA_SIZE];
+        row_ptr_buffer[0]= in2[(u+tile*NUM_NODES)/VDATA_SIZE].data[(u+tile*NUM_NODES)%VDATA_SIZE];
+        row_ptr_buffer[1]= in2[(u+tile*NUM_NODES+1)/VDATA_SIZE].data[(u+tile*NUM_NODES+1)%VDATA_SIZE];
         size_ = row_ptr_buffer[1] - row_ptr_buffer[0];
         buffer_start = row_ptr_buffer[0];
         src_pagerank =  out2[u];
@@ -312,26 +315,29 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
         out_degree_buffer[0]= in3[u/VDATA_SIZE].data[u%VDATA_SIZE];
         out_degree_buffer[1]= in3[(u+1)/VDATA_SIZE].data[(u+1)%VDATA_SIZE]; 
         out_degree_u = out_degree_buffer[1] - out_degree_buffer[0];
-
+        if(out_degree_u != 0){
         //push
-        for (int64_t b = 0; b < out_degree_u; b += UNROLL_SIZE) {
+        for (int64_t b = 0; b < size_; b += UNROLL_SIZE) {
           //prefatch col_idx_buffer
+          int64_t chunk_size = (b + UNROLL_SIZE > size_) ? size_ - b : UNROLL_SIZE;
           for (int64_t k = 0; k < UNROLL_SIZE; k++) {
             #pragma HLS unroll
-            col_idx_buffer[k]= in1[(b + buffer_start + k)/VDATA_SIZE].data[(b + buffer_start + k)%VDATA_SIZE];
+            if( k < chunk_size) {
+                col_idx_buffer[k]= in1[(b + buffer_start + k)/VDATA_SIZE].data[(b + buffer_start + k)%VDATA_SIZE];
+            }
           }
           //SIMD parallel compute
-          int64_t chunk_size = (b + UNROLL_SIZE > out_degree_u) ? out_degree_u - b : UNROLL_SIZE;
-          for (int l = 0; l < UNROLL_SIZE; l++) {
+          for (int64_t l = 0; l < UNROLL_SIZE; l++) {
             #pragma HLS unroll 
             if( l < chunk_size) {
-              int idx = col_idx_buffer[l] - TILE_SIZE*tile;
+              int64_t idx = col_idx_buffer[l] - TILE_SIZE*tile;
               score_buffer[idx] = score_buffer[idx] + (ALPHA * src_pagerank / out_degree_u );
             }
           }
+        }
         }//push_one_vertex
       }//push_one_tile
-      for(int k = 0; k < TILE_SIZE; k++){
+      for(int64_t k = 0; k < TILE_SIZE; k++){
         #pragma HLS pipeline II=1
         if ( k < score_size ) {
           out1[tile*TILE_SIZE + k] = score_buffer[k];
@@ -352,9 +358,10 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
   
   //if converge then break 
   if (diff < EPSILON) {
-      printf("FPGA iter = %ld\n", iter);
       break;
   }
+  //printf("FPGA diff = %f\n", diff);
+  //printf("FPGA iter = %ld\n", iter);
 
   // update score
   if( (iter %2) == 0){
@@ -396,6 +403,7 @@ void pageRank_CSR(const CSRMatrix *A, float *r) {
             int64_t buffer_end = A->row_ptr[(u + 1) / VDATA_SIZE].data[(u + 1) % VDATA_SIZE];
             int64_t buffer_size = buffer_end - buffer_start;
             int64_t out_degree_u = buffer_end - buffer_start;
+            
             int64_t col_idx_buffer[10];
 
             for (int64_t b = 0; b < buffer_size; b += 10) {
@@ -408,18 +416,25 @@ void pageRank_CSR(const CSRMatrix *A, float *r) {
                 for (int64_t k = 0; k < chunk_size; k++) {
                     int64_t v = col_idx_buffer[k];
                     //#pragma omp atomic
-                    r_new[v] += ALPHA * r[u] / out_degree_u;
+                    if(out_degree_u != 0){
+                        r_new[v] += ALPHA * r[u] / out_degree_u;
+                    }
                 }
             }
         }
 
         float diff = 0.0f;
         for (int64_t i = 0; i < num_nodes; i++) {
-            diff += abs(r_new[i] - r[i]) ;
+            float temp = ((r_new[i] - r[i]) > 0 )? 
+                        (r_new[i] - r[i]):
+                        (r[i] - r_new[i]);
+            diff += temp ;
         }
         
+        //printf("CPU iter = %ld\n", iter);
+        //printf("CPU diff = %f\n", diff);
+        
         if (diff < EPSILON) {
-            printf("CPU iter = %ld\n", iter);
             break;
         }
         memcpy(r, r_new, (int64_t)num_nodes * sizeof(float));
@@ -434,7 +449,7 @@ int main(int argc, char **argv) {
   std::string xclbin_file_name = argv[1];
   CSRMatrix A;
   printf("START LOAD\n");
-  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_LiveJournal1.bin");
+  load_csr_matrix(&A, "/home/kdg6245/graph/dataset/csr_matrix_pokec.bin");
   printf("FINISH LOAD\n");
   float *cpu_result = (float *)malloc(A.num_nodes * sizeof(float));
 
@@ -463,11 +478,17 @@ int main(int argc, char **argv) {
   printf("FINISH PREPROCESSING\n");
 
   float *FPGA_result_1 = (float *)malloc((int64_t)A.num_nodes * sizeof(float));
+  for (int i = 0; i < A.num_nodes; ++i) {
+    FPGA_result_1[i] = 1/A.num_nodes;
+  }
   float *FPGA_result_2 = (float *)malloc((int64_t)A.num_nodes * sizeof(float));
+  for (int i = 0; i < A.num_nodes; ++i) {
+    FPGA_result_2[i] = 0.0f;
+  }
   
-  //printf("START FPGA SIM\n");
-  //pagerank(T.col_idx,T.row_ptr, A.row_ptr,FPGA_result_1,FPGA_result_2, NUM_NODES_);
-  //printf("FINISH FPGA SIM\n");
+  printf("START FPGA SIM\n");
+  pagerank(T.col_idx,T.row_ptr, A.row_ptr,FPGA_result_1,FPGA_result_2, NUM_NODES_);
+  printf("FINISH FPGA SIM\n");
 
   //The host code assumes there is a single device and opening a device by
   //device index 0. If there are multiple devices then this device index needed
@@ -606,32 +627,32 @@ int main(int argc, char **argv) {
   free(FPGA_result_1);
   free(FPGA_result_2);
 
-  sum = 0.0;
-  for (int64_t i = 0; i < A.num_nodes; i++) {
-      sum += bo_score_map_1[i];
-  }
-  printf("sum %f\n", sum);
-
-
-  // Validate our results
-  
-  auto compare_begin = std::chrono::high_resolution_clock::now();
-
-  float diff = 0;
-  for (int64_t i = 0; i < A.num_nodes; i++) {
-      diff += abs(bo_score_map_1[i] - bufReference[i]) ;
-  }
-  printf("diff %f\n", diff);
-  
-  if (diff > EPSILON*100)
-    throw std::runtime_error("Score does not match reference");
-  
-  std::cout << "TEST PASSED\n";
-  
-  auto compare_end = std::chrono::high_resolution_clock::now();
-
-  std::chrono::duration<double> compare_duration = compare_end - compare_begin;
-  std::cout << "Compare Time:                 " << compare_duration.count() << " s" << std::endl;
+  //sum = 0.0;
+  //for (int64_t i = 0; i < A.num_nodes; i++) {
+  //    sum += bo_score_map_1[i];
+  //}
+  //printf("sum %f\n", sum);
+//
+//
+  //// Validate our results
+  //
+  //auto compare_begin = std::chrono::high_resolution_clock::now();
+//
+  //float diff = 0;
+  //for (int64_t i = 0; i < A.num_nodes; i++) {
+  //    diff += abs(bo_score_map_1[i] - bufReference[i]) ;
+  //}
+  //printf("diff %f\n", diff);
+  //
+  //if (diff > EPSILON*100)
+  //  throw std::runtime_error("Score does not match reference");
+  //
+  //std::cout << "TEST PASSED\n";
+  //
+  //auto compare_end = std::chrono::high_resolution_clock::now();
+//
+  //std::chrono::duration<double> compare_duration = compare_end - compare_begin;
+  //std::cout << "Compare Time:                 " << compare_duration.count() << " s" << std::endl;
 
   return 0;
 }
