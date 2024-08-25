@@ -491,10 +491,10 @@ int main(int argc, char **argv) {
 
 
   //Check result
-  //for (int i = 0; i < A.num_nodes; i++) {
-  //    std::cout << "Node rank1: " << static_cast<float>(nodes[i].rank) << std::endl;
-  //    std::cout << "Node rank2 " << static_cast<float>(bo_score_map_2[i]) << std::endl;
-  //}
+  for (int i = 0; i < A.num_nodes; i++) {
+      std::cout << "Node rank1: " << static_cast<float>(nodes[i].rank) << std::endl;
+      std::cout << "Node rank2 " << static_cast<float>(bo_score_map_2[i]) << std::endl;
+  }
     
 
   // Validate our results

@@ -16,11 +16,6 @@ void pagerank(const v_dt *in1,  // Read-Only Vector 1 from hbm -> col index
               float *out1,      // Output Result to hbm -> pagerank score
               float *out2       // Output Result to hbm -> pagerank score
               ) {
-#pragma HLS ALLOCATION instances=fmul limit=0 operation
-#pragma HLS ALLOCATION instances=fdiv limit=0 operation
-#pragma HLS ALLOCATION instances=fadd limit=0 operation
-#pragma HLS ALLOCATION instances=fsub limit=0 operation
-#pragma HLS ALLOCATION instances=fcmp limit=0 operation
 
 #pragma HLS INTERFACE m_axi port = in1 offset = slave bundle = gmem0 max_widen_bitwidth=512 
 #pragma HLS INTERFACE m_axi port = in2 offset = slave bundle = gmem1 max_widen_bitwidth=512

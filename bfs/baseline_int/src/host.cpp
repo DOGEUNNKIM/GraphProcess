@@ -446,7 +446,7 @@ int main(int  argc, char **argv) {
   std::cout << "synchronize input buffer data to device global memory finish\n";
   auto fpga_cal_begin = std::chrono::high_resolution_clock::now();
   std::cout << "START FPGA" << std::endl;
-  auto run = krnl(col, row, frontier, Vprop2 ,NUM_NODES);
+  auto run = krnl(col, row, frontier, Vprop2 );
   run.wait();
   std::cout << "FINISH FPGA" << std::endl;
   auto fpga_cal_end = std::chrono::high_resolution_clock::now();

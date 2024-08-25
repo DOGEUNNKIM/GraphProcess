@@ -70,7 +70,7 @@ for (iter = 0; iter < MAX_ITER; iter++) {
       row_ptr_buffer[1]= in2[(u+tile*NUM_NODES+1)/16].data[(u+tile*NUM_NODES+1)%16];
       int size_ = row_ptr_buffer[1] - row_ptr_buffer[0];
       
-	  float src_pagerank =  out1[u] ;
+	    float src_pagerank =  out1[u] ;
       out_degree_buffer[0]= in3[u/16].data[u%16];
       out_degree_buffer[1]= in3[(u+1)/16].data[(u+1)%16]; 
       float out_degree_u; 
